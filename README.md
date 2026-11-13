@@ -9,7 +9,7 @@ Unix socket. The same binary offers continuous supervision with `serve`.
 The supplied-file installer installs that binary as a systemd service. Backend
 synchronization and signed OTA updates are not implemented yet.
 
-With Go 1.27.3, run:
+With Go 1.27.4, run:
 
 ```sh
 go run ./cmd/agent-firmware validate-profile < internal/backendprofile/testdata/profile-v3.json
