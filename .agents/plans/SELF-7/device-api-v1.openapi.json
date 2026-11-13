@@ -1,0 +1,943 @@
+{
+  "openapi": "3.1.0",
+  "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
+  "info": {
+    "title": "Firmware device services API (PROPOSED)",
+    "version": "1.0.0-draft.2",
+    "description": "SELF-7 draft only. HTTP JSON over a configured Unix socket. Read DESIGN.md for peer credentials, filesystem authorization, exact parsing, lifecycle, bounds and open decisions. No listener or architecture acceptance is implied. Consumer-review revision: open capability/purpose identifiers, optional config watch; required mode concerns credential protection, not Gateway process health."
+  },
+  "x-status": "proposed",
+  "servers": [
+    {
+      "url": "http://firmware.local",
+      "description": "Logical HTTP authority only. MUST use configured Unix socket; no TCP/DNS/proxy/redirect."
+    }
+  ],
+  "security": [
+    {
+      "GatewayCapability": []
+    }
+  ],
+  "paths": {
+    "/v1/capabilities": {
+      "get": {
+        "operationId": "getCapabilities",
+        "responses": {
+          "200": {
+            "description": "Capabilities",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Capabilities"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error405"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error429"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          },
+          "431": {
+            "$ref": "#/components/responses/HeaderTooLarge"
+          }
+        },
+        "description": "Discovery is authenticated and bounded. Ignore unknown capability URNs and purpose identifiers, but require credential-seal plus the purposes actually used by the client. The config watcher is optional."
+      }
+    },
+    "/v1/crypto/seal": {
+      "post": {
+        "operationId": "sealCredential",
+        "responses": {
+          "200": {
+            "description": "SealedRecord",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SealedRecord"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error405"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "415": {
+            "$ref": "#/components/responses/Error415"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error429"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          },
+          "431": {
+            "$ref": "#/components/responses/HeaderTooLarge"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SealRequest"
+              }
+            }
+          }
+        },
+        "description": "Reject a syntactically valid but unadvertised/unauthorized purpose as 400 unsupported_purpose; never create a new namespace implicitly."
+      }
+    },
+    "/v1/crypto/unseal": {
+      "post": {
+        "operationId": "unsealCredential",
+        "responses": {
+          "200": {
+            "description": "PlainRecord",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlainRecord"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error405"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "415": {
+            "$ref": "#/components/responses/Error415"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error429"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error422"
+          },
+          "431": {
+            "$ref": "#/components/responses/HeaderTooLarge"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnsealRequest"
+              }
+            }
+          }
+        },
+        "description": "Reject a syntactically valid but unadvertised/unauthorized purpose as 400 unsupported_purpose; never create a new namespace implicitly."
+      }
+    },
+    "/v1/config/agent/changes": {
+      "get": {
+        "operationId": "watchAgentConfig",
+        "responses": {
+          "200": {
+            "description": "ConfigChange",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigChange"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error405"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error429"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          },
+          "431": {
+            "$ref": "#/components/responses/HeaderTooLarge"
+          }
+        },
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80,
+              "pattern": "^[A-Za-z0-9._:-]+$"
+            }
+          },
+          {
+            "name": "wait_seconds",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 25,
+              "default": 25
+            }
+          }
+        ],
+        "description": "Optional acceleration for the existing periodic config/read reconciliation. If not advertised, return 404; transient watch failure does not affect credential-seal or Gateway health. Polling remains enabled."
+      }
+    },
+    "/v1/enrollment/code": {
+      "get": {
+        "operationId": "getEnrollmentCode",
+        "responses": {
+          "200": {
+            "description": "EnrollmentCode",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrollmentCode"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error405"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error429"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          },
+          "431": {
+            "$ref": "#/components/responses/HeaderTooLarge"
+          }
+        },
+        "description": "SELF-9. Present only when the enrollment-code service is advertised. Returns the one-time code held for this installation; 404 not_found means none is held and there is nothing to do. Reading does not spend it. The value is an opaque bearer secret of the control plane: never log, persist or report it."
+      },
+      "delete": {
+        "operationId": "deleteEnrollmentCode",
+        "responses": {
+          "204": {
+            "description": "Removed, or none was held",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/NoStore"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error405"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error429"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error500"
+          },
+          "431": {
+            "$ref": "#/components/responses/HeaderTooLarge"
+          }
+        },
+        "description": "Gateway removes the code once the authorization server answered its redemption, success or refusal. Idempotent."
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "GatewayCapability": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Random installation-scoped capability from separately mounted read-only file. Also requires expected SO_PEERCRED UID and exclusive installation socket mount. Not cloud OAuth."
+      }
+    },
+    "schemas": {
+      "Capabilities": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "protocol",
+          "capabilities",
+          "credential_protection"
+        ],
+        "properties": {
+          "protocol": {
+            "const": "urn:amnezia-gpt:device-api:v1"
+          },
+          "capabilities": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 32,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/CapabilityURN"
+            },
+            "description": "Supported services, including currently unavailable ones. Required-mode Gateway requires credential-seal only; config watch and unknown services are optional."
+          },
+          "credential_protection": {
+            "$ref": "#/components/schemas/CredentialProtection"
+          },
+          "config_watch": {
+            "$ref": "#/components/schemas/ConfigWatchState"
+          }
+        },
+        "example": {
+          "protocol": "urn:amnezia-gpt:device-api:v1",
+          "capabilities": [
+            "urn:amnezia-gpt:device-service:credential-seal:v1",
+            "urn:amnezia-gpt:device-service:codex-config-watch:v1"
+          ],
+          "credential_protection": {
+            "state": "ready",
+            "key_id": "k1_AAECAwQFBgcICQoLDA0ODw",
+            "protection": "host",
+            "purposes": [
+              "gateway-session",
+              "registration-management",
+              "mcp-oauth"
+            ]
+          },
+          "config_watch": {
+            "resource": "urn:amnezia-gpt:device-resource:codex-agent-user-config:v1",
+            "state": "ready"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "capabilities": {
+                  "contains": {
+                    "const": "urn:amnezia-gpt:device-service:codex-config-watch:v1"
+                  }
+                }
+              },
+              "required": [
+                "capabilities"
+              ]
+            },
+            "then": {
+              "required": [
+                "config_watch"
+              ]
+            },
+            "else": {
+              "not": {
+                "required": [
+                  "config_watch"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Exact fields, open capability identifiers. config_watch is present iff its capability is advertised. Missing credential-seal is a semantic compatibility failure for required mode; it does not trigger plaintext fallback or process termination."
+      },
+      "CredentialProtection": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "state",
+          "key_id",
+          "protection",
+          "purposes"
+        ],
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "read_only",
+              "unavailable"
+            ]
+          },
+          "key_id": {
+            "oneOf": [
+              {
+                "type": "string",
+                "pattern": "^k1_[A-Za-z0-9_-]{22}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "protection": {
+            "type": "string",
+            "enum": [
+              "host",
+              "host+tpm2"
+            ],
+            "description": "First delivery uses host only. host+tpm2 is reserved for a separately reviewed implementation and proof, never automatically selected or advertised."
+          },
+          "purposes": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 32,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/Purpose"
+            },
+            "description": "Purposes supported and authorized for this installation Gateway. Initial catalog: gateway-session, registration-management, mcp-oauth. New purposes may be advertised within API v1."
+          }
+        }
+      },
+      "ConfigWatchState": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "resource",
+          "state"
+        ],
+        "properties": {
+          "resource": {
+            "const": "urn:amnezia-gpt:device-resource:codex-agent-user-config:v1"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "unavailable"
+            ]
+          }
+        }
+      },
+      "SealRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "purpose",
+          "record_id",
+          "plaintext"
+        ],
+        "properties": {
+          "purpose": {
+            "$ref": "#/components/schemas/Purpose"
+          },
+          "record_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,128}$",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "plaintext": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "minLength": 2,
+            "maxLength": 87382,
+            "description": "Canonical unpadded base64url; decoded length must be 1..65536 bytes."
+          }
+        },
+        "example": {
+          "purpose": "gateway-session",
+          "record_id": "default",
+          "plaintext": "e30"
+        }
+      },
+      "SealedRecord": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "sealed"
+        ],
+        "properties": {
+          "sealed": {
+            "type": "string",
+            "pattern": "^afseal1\\.[A-Za-z0-9_-]+$",
+            "minLength": 68,
+            "maxLength": 87448,
+            "description": "Opaque versioned AEAD envelope. Client stores and returns exact bytes."
+          }
+        },
+        "example": {
+          "sealed": "afseal1.AAECAwQFBgcICQoLDA0ODwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        },
+        "description": "The example has synthetic format-valid bytes, not a valid ciphertext test vector."
+      },
+      "UnsealRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "purpose",
+          "record_id",
+          "sealed"
+        ],
+        "properties": {
+          "purpose": {
+            "$ref": "#/components/schemas/Purpose"
+          },
+          "record_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,128}$",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "sealed": {
+            "type": "string",
+            "pattern": "^afseal1\\.[A-Za-z0-9_-]+$",
+            "minLength": 68,
+            "maxLength": 87448,
+            "description": "Opaque versioned AEAD envelope. Client stores and returns exact bytes."
+          }
+        },
+        "example": {
+          "purpose": "gateway-session",
+          "record_id": "default",
+          "sealed": "afseal1.AAECAwQFBgcICQoLDA0ODwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        },
+        "description": "Synthetic example exercises wire shape only; its tag is not valid."
+      },
+      "PlainRecord": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "plaintext"
+        ],
+        "properties": {
+          "plaintext": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "minLength": 2,
+            "maxLength": 87382,
+            "description": "Canonical unpadded base64url; decoded length must be 1..65536 bytes."
+          }
+        },
+        "example": {
+          "plaintext": "e30"
+        }
+      },
+      "ConfigChange": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "cursor",
+          "resync"
+        ],
+        "properties": {
+          "cursor": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,80}$",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "resync": {
+            "type": "boolean"
+          }
+        },
+        "example": {
+          "cursor": "e_00000000000000000000000000000000:1",
+          "resync": true
+        }
+      },
+      "Error": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "code",
+              "retryable"
+            ],
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "invalid_request",
+                  "unauthorized",
+                  "forbidden",
+                  "not_found",
+                  "method_not_allowed",
+                  "key_rotation_required",
+                  "payload_too_large",
+                  "unsupported_media_type",
+                  "ciphertext_rejected",
+                  "resource_exhausted",
+                  "internal_error",
+                  "keystore_unavailable",
+                  "watch_unavailable",
+                  "unsupported_purpose"
+                ]
+              },
+              "retryable": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "example": {
+          "error": {
+            "code": "ciphertext_rejected",
+            "retryable": false
+          }
+        }
+      },
+      "CapabilityURN": {
+        "type": "string",
+        "format": "uri",
+        "pattern": "^urn:[A-Za-z0-9-]+:[^\\s]+$",
+        "minLength": 7,
+        "maxLength": 256,
+        "description": "Open URN namespace. Clients ignore well-formed unknown services, require the subset they use and never treat a new identifier as authorization."
+      },
+      "Purpose": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9-]{0,63}$",
+        "minLength": 1,
+        "maxLength": 64,
+        "description": "Extensible identifier. Server accepts only purposes advertised and authorized for the authenticated principal; syntax alone does not grant access."
+      },
+      "EnrollmentCode": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "pattern": "^agpt_enr_[A-Za-z0-9_-]{43}$",
+            "description": "Opaque one-time enrollment code. Firmware checks only these outer bounds."
+          }
+        },
+        "example": {
+          "code": "agpt_enr_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        },
+        "description": "The example is a synthetic shape-valid value, not a credential."
+      }
+    },
+    "responses": {
+      "Error400": {
+        "description": "invalid_request or unsupported_purpose (not retryable)",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        },
+        "headers": {
+          "Cache-Control": {
+            "$ref": "#/components/headers/NoStore"
+          }
+        }
+      },
+      "Error401": {
+        "description": "unauthorized",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        },
+        "headers": {
+          "Cache-Control": {
+            "$ref": "#/components/headers/NoStore"
+          }
+        }
+      },
+      "Error403": {
+        "description": "forbidden",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        },
+        "headers": {
+          "Cache-Control": {
+            "$ref": "#/components/headers/NoStore"
+          }
+        }
+      },
+      "Error404": {
+        "description": "not_found",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        },
+        "headers": {
+          "Cache-Control": {
+            "$ref": "#/components/headers/NoStore"
+          }
+        }
+      },
+      "Error405": {
+        "description": "method_not_allowed",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        },
+        "headers": {
+          "Cache-Control": {
+            "$ref": "#/components/headers/NoStore"
+          }
+        }
+      },
+      "Error429": {
+        "description": "resource_exhausted",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        },
+        "headers": {
+          "Cache-Control": {
+            "$ref": "#/components/headers/NoStore"
+          },
+          "Retry-After": {
+            "$ref": "#/components/headers/RetryAfter"
+          }
+        }
+      },
+      "Error500": {
+        "description": "internal_error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        },
+        "headers": {
+          "Cache-Control": {
+            "$ref": "#/components/headers/NoStore"
+          }
+        }
+      },
+      "Error503": {
+        "description": "service unavailable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        },
+        "headers": {
+          "Cache-Control": {
+            "$ref": "#/components/headers/NoStore"
+          },
+          "Retry-After": {
+            "$ref": "#/components/headers/RetryAfter"
+          }
+        }
+      },
+      "Error413": {
+        "description": "payload_too_large",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        },
+        "headers": {
+          "Cache-Control": {
+            "$ref": "#/components/headers/NoStore"
+          }
+        }
+      },
+      "Error415": {
+        "description": "unsupported_media_type",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        },
+        "headers": {
+          "Cache-Control": {
+            "$ref": "#/components/headers/NoStore"
+          }
+        }
+      },
+      "Error409": {
+        "description": "key_rotation_required",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        },
+        "headers": {
+          "Cache-Control": {
+            "$ref": "#/components/headers/NoStore"
+          }
+        }
+      },
+      "Error422": {
+        "description": "ciphertext_rejected",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        },
+        "headers": {
+          "Cache-Control": {
+            "$ref": "#/components/headers/NoStore"
+          }
+        }
+      },
+      "HeaderTooLarge": {
+        "description": "HTTP parser may reject excessive headers before the JSON handler. Body is not part of the application JSON contract."
+      }
+    },
+    "headers": {
+      "NoStore": {
+        "schema": {
+          "const": "no-store"
+        }
+      },
+      "RetryAfter": {
+        "description": "Optional bounded delay, whole seconds 1..30.",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30
+        }
+      }
+    }
+  }
+}
