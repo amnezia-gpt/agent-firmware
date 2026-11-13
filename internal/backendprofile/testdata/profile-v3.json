@@ -1,0 +1,9 @@
+{
+  "schema_version": 3,
+  "backend_profile": "example",
+  "auth_issuer": "https://auth.example",
+  "router_base_url": "https://router.example/v1",
+  "runtime_gateway_base_url": "https://runtime.example",
+  "ingress_trust_bundle": "{\n  \"schema_version\": 1,\n  \"issuer\": \"https://auth.example\",\n  \"keys\": [\n    {\n      \"kty\": \"EC\",\n      \"crv\": \"P-256\",\n      \"use\": \"sig\",\n      \"alg\": \"ES256\",\n      \"kid\": \"example-key\",\n      \"x\": \"axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY\",\n      \"y\": \"T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU\"\n    }\n  ]\n}\n",
+  "ingress_trust_sha256": "0cd1ebfe204f6b74598abd9748887ac2f7c43ac905a080d755be05bb582f1e0e"
+}

@@ -1,0 +1,39 @@
+#!/bin/sh
+# Builds the three public assets of one firmware release into a directory:
+# the linux/amd64 binary, the workload release file and the installation
+# script stamped with the tag and both digests. Run by the release workflow;
+# runs the same way on a development machine.
+#
+#   sh scripts/build-release.sh <tag> <output directory>
+#
+# The workload release file is release/workload-release.json in this
+# repository (WORKLOAD_RELEASE overrides the path for a local trial).
+set -eu
+
+[ "$#" = 2 ] || { echo 'usage: build-release.sh <tag> <output directory>' >&2; exit 2; }
+tag=$1 out=$2
+case "$tag" in v[0-9]*) : ;; *) echo 'tag must look like v1.2.3' >&2; exit 2 ;; esac
+case "$tag" in *[!0-9A-Za-z.+-]*) echo 'tag has unsupported characters' >&2; exit 2 ;; esac
+cd "$(dirname "$0")/.."
+workload=${WORKLOAD_RELEASE:-release/workload-release.json}
+[ -f "$workload" ] || { echo "workload release file is missing: $workload" >&2; exit 1; }
+
+digest() {
+ if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d ' ' -f 1
+ else shasum -a 256 "$1" | cut -d ' ' -f 1; fi
+}
+
+mkdir -p "$out"
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o "$out/agent-firmware-linux-amd64" ./cmd/agent-firmware
+# The firmware of this very revision must accept the workload release it ships with.
+go run ./cmd/agent-firmware validate --profile internal/backendprofile/testdata/profile-v3.json --release "$workload" >/dev/null \
+ || { echo 'this firmware rejects the workload release file' >&2; exit 1; }
+cp "$workload" "$out/workload-release.json"
+
+sed -e "s/@@RELEASE_TAG@@/$tag/" \
+ -e "s/@@FIRMWARE_SHA256@@/$(digest "$out/agent-firmware-linux-amd64")/" \
+ -e "s/@@WORKLOAD_RELEASE_SHA256@@/$(digest "$out/workload-release.json")/" \
+ scripts/agent-firmware-install.sh > "$out/agent-firmware-install.sh"
+! grep -q '@@' "$out/agent-firmware-install.sh" || { echo 'a placeholder was left unstamped' >&2; exit 1; }
+sh -n "$out/agent-firmware-install.sh"
+printf 'agent-firmware-install.sh sha256 %s\n' "$(digest "$out/agent-firmware-install.sh")"

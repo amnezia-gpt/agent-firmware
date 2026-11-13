@@ -1,0 +1,24 @@
+{
+  "schema_version": 2,
+  "kind": "agent-workloads-release",
+  "release": "v0.1.0",
+  "source_revision": "1111111111111111111111111111111111111111",
+  "platform": "linux/amd64",
+  "workload_contract": "urn:amnezia-gpt:workload-contract:device:v1",
+  "images": {
+    "openclaw-codex": {
+      "repository": "docker.io/amneziavpn/agent-workload-openclaw-codex",
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "reference": "docker.io/amneziavpn/agent-workload-openclaw-codex@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_tag": "sha-1111111111111111111111111111111111111111",
+      "release_tag": "v0.1.0"
+    },
+    "amgpt-device-gateway": {
+      "repository": "docker.io/amneziavpn/agent-workload-amgpt-auth-proxy",
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "reference": "docker.io/amneziavpn/agent-workload-amgpt-auth-proxy@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "source_tag": "sha-1111111111111111111111111111111111111111",
+      "release_tag": "v0.1.0"
+    }
+  }
+}

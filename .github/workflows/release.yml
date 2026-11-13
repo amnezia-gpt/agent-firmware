@@ -1,0 +1,32 @@
+name: release
+
+# A pushed tag v* publishes the release: the installation script, the
+# linux/amd64 binary and the workload release file. The enrollment page of the
+# authorization server points at releases/latest/download/agent-firmware-install.sh,
+# so nothing outside this repository changes for a release.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Test
+        run: |
+          test -z "$(gofmt -l cmd internal)"
+          go vet ./...
+          CGO_ENABLED=0 go test ./...
+      - name: Build assets
+        run: sh scripts/build-release.sh "$GITHUB_REF_NAME" dist
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/agent-firmware-install.sh dist/agent-firmware-linux-amd64 dist/workload-release.json --verify-tag --generate-notes
