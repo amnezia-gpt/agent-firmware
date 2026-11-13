@@ -1,0 +1,4 @@
+interface:
+  display_name: "Issue Acceptance"
+  short_description: "Describe, decompose, and accept local or GitHub issues"
+  default_prompt: "Use $issue-acceptance to inspect this repo, assign SELF IDs and decompose the discussed feature into local issue records; reuse my authorized scope and create an implementation branch only when implementation is requested."
