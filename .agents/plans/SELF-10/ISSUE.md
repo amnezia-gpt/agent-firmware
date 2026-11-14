@@ -187,3 +187,13 @@ Evidence: `CGO_ENABLED=0 go test ./...`, `go vet ./...` (also `GOOS=linux GOARCH
 Limits: no real Auth, Router or Runtime Gateway document was fetched; the firmware binary, installer, Docker,
 systemd and network are stubs in the bootstrap test; no release exists, so the stamped script was never downloaded.
 Rotation of the ingress key after installation is not handled (the bundle is read once).
+
+## Defect Found By The First Real-Host Run, 2026-11-14
+
+The script kept its work directory under `/run`, which Ubuntu mounts `noexec`, so the downloaded firmware could not
+be executed (`Permission denied` at the dry run; nothing on the host changed). The container test did not catch it
+because its `/run` allowed execution. The work directory now lives under `/usr/local/lib`, where the firmware is
+installed anyway, and the script test is run with `/run` mounted `noexec`; the old script fails that test with the
+same message. On the selected disposable host the published binary, run from an executable directory, accepted a
+well-formed code, passed the dry run against a live environment and the Docker preflight. A full installation there
+has still not been run.

@@ -82,7 +82,10 @@ main() {
 
  # Every program before the installer gets an empty standard input, so the
  # code, when piped in, is still unread when the firmware takes it.
- workdir=$(mktemp -d /run/agent-firmware-bootstrap.XXXXXXXX) || die bootstrap_write_failed
+ # The work directory must allow execution: /run is mounted noexec on Ubuntu,
+ # so it lives beside the place the firmware is installed to. It is private
+ # (umask 077), holds no secret and is removed on exit.
+ workdir=$(mktemp -d /usr/local/lib/agent-firmware-bootstrap.XXXXXXXX) || die bootstrap_write_failed
  base_url=https://github.com/amnezia-gpt/agent-firmware/releases/download/$release_tag
  fetch() {
   # $1 asset name, $2 expected sha256, $3 size cap in bytes

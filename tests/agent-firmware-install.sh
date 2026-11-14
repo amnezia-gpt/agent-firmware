@@ -1,5 +1,7 @@
 #!/bin/sh
 # Run only in an explicitly prepared, disposable test container without Docker socket.
+# Mount /run noexec, as Ubuntu does (docker run --tmpfs /run:rw,noexec,nosuid ...):
+# the downloaded firmware must be executed from a directory that allows it.
 # Network, package manager, Docker and the firmware binary are stubs: this
 # proves the script's own ordering and refusals, not a real installation.
 set -eu
@@ -72,7 +74,7 @@ run_piped() { value=$1; shift; : > "$fx/calls"; set +e; printf '%s' "$value" | s
 expect_error() { [ "$code" = 1 ] && [ "$(cat "$fx/stderr")" = "{\"error_code\":\"$1\"}" ] || { echo "expected $1, got $code: $(cat "$fx/stderr")" >&2; exit 1; }; }
 no_changes() { ! grep -Eq '^(apt-get|curl|firmware|systemctl enable)' "$fx/calls" || { echo "unexpected side effect: $(cat "$fx/calls")" >&2; exit 1; }; }
 no_secret() { ! grep -rqF "$secret" "$fx/calls" "$fx/stdout" "$fx/stderr" || { echo 'enrollment code leaked' >&2; exit 1; }; }
-installed() { grep -Eq "^firmware install --issuer https://auth.example.test --release /run/agent-firmware-bootstrap\.[A-Za-z0-9]+/workload-release.json$1\$" "$fx/calls"; }
+installed() { grep -Eq "^firmware install --issuer https://auth.example.test --release /usr/local/lib/agent-firmware-bootstrap\.[A-Za-z0-9]+/workload-release.json$1\$" "$fx/calls"; }
 not_installed() { ! grep '^firmware install' "$fx/calls" | grep -qv -- '--dry-run$' || { echo 'installer ran' >&2; exit 1; }; }
 args='--issuer https://auth.example.test'
 
@@ -141,7 +143,7 @@ done
 # The firmware's own error is passed through once; the work directory is removed.
 touch "$fx/install-fails"; run_piped "$secret" "$fx/bootstrap.sh" $args --enrollment-code-stdin; expect_error configuration_rejected
 rm "$fx/install-fails"
-[ -z "$(find /run -maxdepth 1 -name 'agent-firmware-bootstrap.*')" ] || { echo 'work directory left behind' >&2; exit 1; }
+[ -z "$(find /usr/local/lib -maxdepth 1 -name 'agent-firmware-bootstrap.*')" ] || { echo 'work directory left behind' >&2; exit 1; }
 
 # A truncated script executes nothing.
 head -n 40 "$fx/bootstrap.sh" > "$fx/truncated.sh"
