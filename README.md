@@ -168,6 +168,18 @@ agent-firmware install --issuer https://auth.example --release workload-release.
 sudo systemctl status agent-firmware.service
 ```
 
+An installed machine is updated with one constant command, the same for every
+environment; it needs no code and no page:
+
+```sh
+sudo agent-firmware update
+```
+
+It reads the issuer this installation was made for, downloads the installation
+script of the latest release and runs it. Firmware and the workload release
+pinned by that firmware release are updated together; identity, sign-in and
+data are kept.
+
 `--dry-run` validates the issuer, the discovered profile and the release and
 changes nothing; the script runs it before it touches Docker. `install` copies
 the running binary to `/usr/local/lib/agent-firmware/releases/<sha256>/`,

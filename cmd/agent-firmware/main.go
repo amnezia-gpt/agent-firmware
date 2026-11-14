@@ -41,6 +41,9 @@ func run(args []string, input io.Reader, stdout, stderr io.Writer) int {
 			Ready bool `json:"ready"`
 		}{true})
 	}
+	if len(args) > 0 && args[0] == "update" {
+		return runUpdate(args[1:], stdout, stderr)
+	}
 	if len(args) > 0 && args[0] == "install" {
 		return runInstall(args[1:], input, stdout, stderr)
 	}

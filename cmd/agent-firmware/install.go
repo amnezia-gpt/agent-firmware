@@ -195,6 +195,7 @@ func runInstall(args []string, input io.Reader, stdout, stderr io.Writer) int {
 	} else {
 		progress("Installed")
 	}
+	progress("To update later, run: sudo agent-firmware update")
 	return respond(stdout, stderr, struct {
 		Installed bool `json:"installed"`
 	}{true})
