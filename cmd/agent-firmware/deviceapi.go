@@ -75,7 +75,7 @@ const errEnrollmentAPI deviceapi.Error = "enrollment_requires_device_api"
 func enrollmentCode(store configuration.Store, input io.Reader, set bool) (string, error) {
 	code := ""
 	if set {
-		b, err := io.ReadAll(io.LimitReader(input, 128))
+		b, err := io.ReadAll(io.LimitReader(input, deviceapi.MaxEnrollmentCode+2))
 		code = strings.TrimSuffix(string(b), "\n")
 		if err != nil || !deviceapi.ValidEnrollmentCode(code) {
 			return "", deviceapi.ErrEnrollmentCode

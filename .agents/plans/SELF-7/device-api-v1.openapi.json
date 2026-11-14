@@ -723,12 +723,12 @@
         "properties": {
           "code": {
             "type": "string",
-            "pattern": "^agpt_enr_[A-Za-z0-9_-]{43}$",
+            "pattern": "^[A-Za-z0-9_-]{16,128}$",
             "description": "Opaque one-time enrollment code. Firmware checks only these outer bounds."
           }
         },
         "example": {
-          "code": "agpt_enr_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          "code": "enrc_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
         },
         "description": "The example is a synthetic shape-valid value, not a credential."
       }

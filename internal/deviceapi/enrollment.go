@@ -18,7 +18,12 @@ const ErrEnrollmentCode Error = "invalid_enrollment_code"
 const enrollmentFile = "enrollment-code"
 const enrollmentTTL = time.Hour
 
-var enrollmentPattern = regexp.MustCompile(`^agpt_enr_[A-Za-z0-9_-]{43}$`)
+// The code is opaque here: only its alphabet and a sane length are checked. Its
+// prefix and exact length belong to the authorization server and may change
+// without a firmware release.
+const MaxEnrollmentCode = 128
+
+var enrollmentPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{16,128}$`)
 
 func ValidEnrollmentCode(code string) bool { return enrollmentPattern.MatchString(code) }
 

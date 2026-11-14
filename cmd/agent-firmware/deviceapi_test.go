@@ -24,8 +24,8 @@ func TestAPIKeyCommandsCheckRootAndExistingConfiguration(t *testing.T) {
 
 func TestEnrollmentCodeIsNeverAnArgument(t *testing.T) {
 	for _, args := range [][]string{
-		{"enrollment-code-set", "agpt_enr_" + strings.Repeat("A", 43)},
-		{"enrollment-code-set", "--code", "agpt_enr_" + strings.Repeat("A", 43)},
+		{"enrollment-code-set", "enrc_" + strings.Repeat("A", 43)},
+		{"enrollment-code-set", "--code", "enrc_" + strings.Repeat("A", 43)},
 		{"enrollment-code-clear", "--profile", "a"},
 	} {
 		var out, err bytes.Buffer
@@ -61,7 +61,7 @@ func TestEnrollmentCodeCommandsOnDisposableRootHost(t *testing.T) {
 			t.Fatal("configure:", errs)
 		}
 	}
-	example := "agpt_enr_" + strings.Repeat("A", 43)
+	example := "enrc_" + strings.Repeat("A", 43)
 	configure("device:v1")
 	if code, _, errs := invoke(example+"\n", "enrollment-code-set"); code != 1 || errs != `{"error_code":"enrollment_requires_device_api"}`+"\n" {
 		t.Fatal("code accepted without the Device API:", errs)

@@ -12,7 +12,7 @@ import (
 	"github.com/amnezia-gpt/agent-firmware/internal/installer"
 )
 
-const installCode = "agpt_enr_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopq"
+const installCode = "enrc_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopq"
 
 func TestInstallCommand(t *testing.T) {
 	profile, err := os.ReadFile("../../internal/backendprofile/testdata/profile-v3.json")
@@ -59,7 +59,8 @@ func TestInstallCommand(t *testing.T) {
 		{"code on standard input", with("--enrollment-code-stdin"), installCode, "", 0, "{\"installed\":true}\n", "", 1, installCode},
 		{"code from a file", with("--enrollment-code-file", codeFile), "", "", 0, "{\"installed\":true}\n", "", 1, installCode},
 		{"dry run changes nothing", with("--dry-run"), "", "", 0, "{\"valid\":true}\n", "", 0, ""},
-		{"code out of bounds", with("--enrollment-code-stdin"), "agpt_enr_short", "", 1, "", "{\"error_code\":\"invalid_enrollment_code\"}\n", 0, ""},
+		{"code out of bounds", with("--enrollment-code-stdin"), "enrc_short", "", 1, "", "{\"error_code\":\"invalid_enrollment_code\"}\n", 0, ""},
+		{"over-long code is refused, not truncated", with("--enrollment-code-stdin"), strings.Repeat("A", 400), "", 1, "", "{\"error_code\":\"invalid_enrollment_code\"}\n", 0, ""},
 		{"no code on standard input", with("--enrollment-code-stdin"), "", "", 1, "", "{\"error_code\":\"invalid_enrollment_code\"}\n", 0, ""},
 		{"unreadable code file", with("--enrollment-code-file", codeFile+".missing"), "", "", 1, "", "{\"error_code\":\"input_read_failed\"}\n", 0, ""},
 		{"host not ready", with(), "", "root_required", 1, "", "{\"error_code\":\"root_required\"}\n", 0, ""},

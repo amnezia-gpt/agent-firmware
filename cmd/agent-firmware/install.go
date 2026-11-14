@@ -148,7 +148,7 @@ func runInstall(args []string, input io.Reader, stdout, stderr io.Writer) int {
 			source = file
 		}
 		// Bounds only: the code is opaque here and Auth is its authority.
-		data, err := io.ReadAll(io.LimitReader(source, 128))
+		data, err := io.ReadAll(io.LimitReader(source, deviceapi.MaxEnrollmentCode+2))
 		if err != nil {
 			return report(stderr, "input_read_failed", 1)
 		}

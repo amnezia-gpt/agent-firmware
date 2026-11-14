@@ -10,7 +10,7 @@ import (
 )
 
 // Synthetic value with the contract's shape; it is not a credential.
-var exampleCode = "agpt_enr_" + strings.Repeat("A", 43)
+var exampleCode = "enrc_" + strings.Repeat("A", 43)
 
 func testCodes(t *testing.T) (*CodeStore, *time.Time) {
 	t.Helper()
@@ -21,13 +21,17 @@ func testCodes(t *testing.T) (*CodeStore, *time.Time) {
 func TestEnrollmentCodeBounds(t *testing.T) {
 	for code, valid := range map[string]bool{
 		exampleCode: true,
-		"agpt_enr_" + strings.Repeat("-", 21) + strings.Repeat("_", 22): true,
-		"":                                    false,
-		exampleCode + "A":                     false,
-		exampleCode[:len(exampleCode)-1]:      false,
-		"agpt_xxx_" + strings.Repeat("A", 43): false,
-		"agpt_enr_" + strings.Repeat("A", 42) + "=": false,
-		exampleCode + "\n":                          false,
+		"enrc_" + strings.Repeat("-", 21) + strings.Repeat("_", 22): true,
+		// The prefix and exact length are the authorization server's; any token of the alphabet in bounds passes.
+		"other_" + strings.Repeat("A", 43):      true,
+		strings.Repeat("A", 16):                 true,
+		strings.Repeat("A", 128):                true,
+		"":                                      false,
+		strings.Repeat("A", 15):                 false,
+		strings.Repeat("A", 129):                false,
+		"enrc_" + strings.Repeat("A", 42) + "=": false,
+		"enrc_" + strings.Repeat("A", 42) + " ": false,
+		exampleCode + "\n":                      false,
 	} {
 		if ValidEnrollmentCode(code) != valid {
 			t.Fatalf("bounds check of a %d-byte value: want %v", len(code), valid)
@@ -56,7 +60,7 @@ func TestEnrollmentCodeHoldReplaceDelete(t *testing.T) {
 			t.Fatal("held code not returned")
 		}
 	}
-	other := "agpt_enr_" + strings.Repeat("B", 43)
+	other := "enrc_" + strings.Repeat("B", 43)
 	if err := s.Put(other); err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +175,7 @@ func TestEnrollmentCodeRoutes(t *testing.T) {
 	callAPI(h, GatewayUID, v.token(), "GET", "/v1/enrollment/code", "")
 	for len(h.diagnostics.events) > 0 {
 		b, _ := json.Marshal(<-h.diagnostics.events)
-		if strings.Contains(string(b), "agpt_enr_") {
+		if strings.Contains(string(b), "enrc_") {
 			t.Fatal("code in diagnostics")
 		}
 	}

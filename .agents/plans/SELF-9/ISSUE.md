@@ -28,8 +28,9 @@ enrolls on first start with outbound connections only.
 ## Scope
 
 - **Input.** The installer accepts the code only from stdin or a file supplied by the bootstrap (SELF-10), never as
-  a command argument (CWE-214: arguments are visible in process listings). Bounds check only: the `agpt_enr_`
-  prefix and length; anything else is `invalid_enrollment_code` before any change.
+  a command argument (CWE-214: arguments are visible in process listings). Bounds check only: the base64url alphabet and a length of 16 to 128
+  (until 2026-11-14 also a fixed prefix; dropped because the prefix belongs to the authorization server and
+  changed once). Anything else is `invalid_enrollment_code` before any change.
 - **Holding.** Firmware keeps the code in its root-owned runtime directory `/run/agent-firmware/<installation>/`
   (tmpfs, 0700), never in a Docker volume, the retained configuration, the workload journal, logs or diagnostics.
   It is not placed in the identity volume: that volume persists across reinstallation and backups and holds the

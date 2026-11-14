@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-const testCode = "agpt_enr_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopq"
+const testCode = "enrc_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopq"
 
 // host is a private tree standing in for the system paths, with recording fakes.
 type host struct {

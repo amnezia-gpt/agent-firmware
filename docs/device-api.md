@@ -117,7 +117,7 @@ included in error replies.
 
 SELF-9 adds the service `urn:amnezia-gpt:device-service:enrollment-code:v1` to
 API v1 for device:v2 installations. The one-time enrollment code of the control
-plane (`agpt_enr_` plus 43 base64url characters) is an opaque bearer secret that
+plane is an opaque bearer secret (firmware checks only its alphabet and a length of 16 to 128) that
 firmware only carries from the installation command to Gateway:
 
 - `agent-firmware install` takes it from standard input

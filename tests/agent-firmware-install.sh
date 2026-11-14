@@ -66,7 +66,7 @@ fsum=$(sha256sum "$fx/assets/agent-firmware-linux-amd64" | cut -d ' ' -f 1)
 wsum=$(sha256sum "$fx/assets/workload-release.json" | cut -d ' ' -f 1)
 stamp() { sed -e "s/@@RELEASE_TAG@@/$1/" -e "s/@@FIRMWARE_SHA256@@/$2/" -e "s/@@WORKLOAD_RELEASE_SHA256@@/$3/" scripts/agent-firmware-install.sh > "$fx/bootstrap.sh"; }
 
-secret=agpt_enr_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopq
+secret=enrc_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopq
 run() { : > "$fx/calls"; set +e; sh "$@" > "$fx/stdout" 2> "$fx/stderr" < /dev/null; code=$?; set -e; }
 run_piped() { value=$1; shift; : > "$fx/calls"; set +e; printf '%s' "$value" | sh "$@" > "$fx/stdout" 2> "$fx/stderr"; code=$?; set -e; }
 expect_error() { [ "$code" = 1 ] && [ "$(cat "$fx/stderr")" = "{\"error_code\":\"$1\"}" ] || { echo "expected $1, got $code: $(cat "$fx/stderr")" >&2; exit 1; }; }
