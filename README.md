@@ -153,6 +153,11 @@ downloads the script, checks its SHA-256 and runs:
 printf '%s' '<one-time code>' | sudo sh agent-firmware-install.sh --issuer https://auth.example --enrollment-code-stdin
 ```
 
+While it works, the script and the firmware print short progress lines on
+standard error (download, server check, Docker, service, image download with a
+reminder every 30 seconds); standard output carries only the final
+`{"installed":true}` and an error is one JSON line. The code is never printed.
+
 The script passes its standard input (or `--enrollment-code-file <file>`)
 to the firmware untouched; the code is never an argument. The firmware command
 it starts, from the verified download, is:

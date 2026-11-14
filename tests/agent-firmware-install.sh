@@ -71,7 +71,8 @@ stamp() { sed -e "s/@@RELEASE_TAG@@/$1/" -e "s/@@FIRMWARE_SHA256@@/$2/" -e "s/@@
 secret=enrc_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopq
 run() { : > "$fx/calls"; set +e; sh "$@" > "$fx/stdout" 2> "$fx/stderr" < /dev/null; code=$?; set -e; }
 run_piped() { value=$1; shift; : > "$fx/calls"; set +e; printf '%s' "$value" | sh "$@" > "$fx/stdout" 2> "$fx/stderr"; code=$?; set -e; }
-expect_error() { [ "$code" = 1 ] && [ "$(cat "$fx/stderr")" = "{\"error_code\":\"$1\"}" ] || { echo "expected $1, got $code: $(cat "$fx/stderr")" >&2; exit 1; }; }
+# Progress lines may precede it, but an error is exactly one JSON line and the last one.
+expect_error() { [ "$code" = 1 ] && [ "$(tail -n 1 "$fx/stderr")" = "{\"error_code\":\"$1\"}" ] && [ "$(grep -c error_code "$fx/stderr")" = 1 ] || { echo "expected $1, got $code: $(cat "$fx/stderr")" >&2; exit 1; }; }
 no_changes() { ! grep -Eq '^(apt-get|curl|firmware|systemctl enable)' "$fx/calls" || { echo "unexpected side effect: $(cat "$fx/calls")" >&2; exit 1; }; }
 no_secret() { ! grep -rqF "$secret" "$fx/calls" "$fx/stdout" "$fx/stderr" || { echo 'enrollment code leaked' >&2; exit 1; }; }
 installed() { grep -Eq "^firmware install --issuer https://auth.example.test --release /usr/local/lib/agent-firmware-bootstrap\.[A-Za-z0-9]+/workload-release.json$1\$" "$fx/calls"; }
@@ -111,6 +112,10 @@ rm "$fx/apt-fails"; run "$fx/bootstrap.sh" $args
 grep -q 'install docker.io' "$fx/calls" && grep -q '^systemctl enable --now docker.service' "$fx/calls"
 installed ''
 grep -q 'releases/download/v0.1.0/agent-firmware-linux-amd64' "$fx/calls"
+# The owner sees what is happening, in order, on standard error.
+[ "$(cat "$fx/stderr")" = "agent-firmware-install: Downloading firmware v0.1.0
+agent-firmware-install: Checking the authorization server https://auth.example.test
+agent-firmware-install: Installing Docker from the Ubuntu archive, this can take a few minutes" ] || { echo "progress: $(cat "$fx/stderr")" >&2; exit 1; }
 [ "$(cat "$fx/seen-release")" = '{"release":true}' ] && [ ! -s "$fx/seen-input" ] && [ "$(cat "$fx/stdout")" = '{"installed":true}' ]
 
 # The piped code reaches the firmware untouched: apt, curl and the check did not read it, no argument or output has it.

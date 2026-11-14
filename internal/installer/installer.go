@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // Error is a bounded diagnostic; it never contains input, paths or underlying errors.
@@ -107,7 +108,40 @@ type Request struct {
 	Code     string
 	Systemd  Systemd
 	Firmware Firmware
+	// Progress, when set, receives short human-readable lines about the current step.
+	Progress func(message string)
 }
+
+func (r *run) say(message string) {
+	if r.Progress != nil {
+		r.Progress(message)
+	}
+}
+
+// waiting repeats a reassurance while a long step runs, so a silent start is not mistaken for a hang.
+func (r *run) waiting(message string) (stop func()) {
+	if r.Progress == nil {
+		return func() {}
+	}
+	done := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		ticker := time.NewTicker(waitingInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				r.Progress(message)
+			}
+		}
+	}()
+	return func() { close(done); <-finished }
+}
+
+var waitingInterval = 30 * time.Second
 
 type run struct {
 	Request
@@ -144,6 +178,7 @@ func Install(ctx context.Context, request Request) (err error) {
 	if err != nil {
 		return err
 	}
+	r.say("Checking the host and Docker")
 	if r.Firmware.Preflight(ctx) != nil {
 		return ErrDocker
 	}
@@ -181,6 +216,7 @@ func Install(ctx context.Context, request Request) (err error) {
 		if err == nil {
 			return
 		}
+		r.say("Installation failed, restoring the previous state")
 		if codeHeld {
 			// A failed installation must not leave a bearer secret behind.
 			r.Firmware.ClearCode()
@@ -198,6 +234,7 @@ func Install(ctx context.Context, request Request) (err error) {
 		}
 		return nil
 	}
+	r.say("Installing the firmware service")
 	if exists(filepath.Join(r.transaction, "was-active")) {
 		if err = step(ErrStop, func() error { return r.Systemd.Do(ctx, "stop") }); err != nil {
 			return err
@@ -242,6 +279,9 @@ func Install(ctx context.Context, request Request) (err error) {
 			return err
 		}
 	}
+	r.say("Starting the service and downloading the workload images, this can take several minutes")
+	stopWaiting := r.waiting("Still starting, please wait")
+	defer stopWaiting()
 	if err = step(ErrStart, func() error {
 		if r.Systemd.Do(ctx, "start") != nil || !r.Systemd.Active(ctx) {
 			return ErrStart

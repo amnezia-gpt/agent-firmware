@@ -362,3 +362,31 @@ func TestInterruptionRollsBack(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestProgressNamesTheStepsAndNeverTheCode(t *testing.T) {
+	h := newHost(t)
+	binary := filepath.Join(t.TempDir(), "binary")
+	if err := os.WriteFile(binary, []byte("version one"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	request := Request{Layout: h.layout, Binary: binary, Code: testCode, Systemd: h, Firmware: h, Progress: func(m string) { lines = append(lines, m) }}
+	if err := Install(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(lines, "|")
+	if !strings.HasPrefix(got, "Checking the host and Docker|Installing the firmware service|Starting the service") || strings.Contains(got, testCode) || strings.Contains(got, "failed") {
+		t.Fatal(got)
+	}
+	// A failed start says that the previous state is being restored.
+	h2 := newHost(t)
+	h2.fail["dies"] = true
+	lines = nil
+	request.Layout, request.Systemd, request.Firmware = h2.layout, h2, h2
+	if err := Install(context.Background(), request); err != ErrStart {
+		t.Fatal(err)
+	}
+	if last := lines[len(lines)-1]; last != "Installation failed, restoring the previous state" {
+		t.Fatal(last)
+	}
+}

@@ -30,6 +30,9 @@ main() {
  reported=false
  workdir=
  die() { error_code=$1; exit 1; }
+ # Progress goes to standard error as plain lines; the result and an error
+ # stay single JSON lines. The enrollment code is never printed.
+ say() { printf 'agent-firmware-install: %s\n' "$1" >&2; }
  cleanup() {
   status=$?
   trap - EXIT HUP INT TERM
@@ -95,6 +98,7 @@ main() {
   [ "$(stat -c '%s' -- "$workdir/$1")" -le "$3" ] || die download_failed
   [ "$(sha256sum "$workdir/$1" | cut -d ' ' -f 1)" = "$2" ] || die artifact_digest_mismatch
  }
+ say "Downloading firmware $release_tag"
  fetch agent-firmware-linux-amd64 "$firmware_sha256" 67108864
  fetch workload-release.json "$workload_sha256" 65536
  firmware=$workdir/agent-firmware-linux-amd64
@@ -102,6 +106,7 @@ main() {
 
  # The firmware checks the issuer and the release before the host changes and
  # reports its own error code; do not print a second one.
+ say "Checking the authorization server $issuer"
  status=0
  timeout 90s "$firmware" install --issuer "$issuer" --release "$workdir/workload-release.json" --dry-run \
   </dev/null >/dev/null || status=$?
@@ -115,7 +120,9 @@ main() {
  # distribution's signed archive, not from a remote convenience script.
  if command -v docker >/dev/null 2>&1; then
   timeout 10s systemctl is-active --quiet docker.service </dev/null || die docker_not_running
+  say "Docker is already installed"
  else
+  say "Installing Docker from the Ubuntu archive, this can take a few minutes"
   DEBIAN_FRONTEND=noninteractive
   export DEBIAN_FRONTEND
   timeout 600s apt-get -o DPkg::Lock::Timeout=120 -qq update </dev/null >/dev/null 2>&1 || die docker_install_failed

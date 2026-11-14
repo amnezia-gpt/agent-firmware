@@ -73,7 +73,7 @@ var (
 		}
 		return ""
 	}
-	place = func(ctx context.Context, accepted *configuration.Input, code string) error {
+	place = func(ctx context.Context, accepted *configuration.Input, code string, progress func(string)) error {
 		binary, err := os.Executable()
 		if err != nil {
 			return installer.ErrWrite
@@ -81,7 +81,7 @@ var (
 		store := configuration.Store{Path: defaultStateDir}
 		return installer.Install(ctx, installer.Request{
 			Layout: installer.HostLayout(), Binary: binary, Code: code,
-			Systemd: installer.Systemctl{}, Firmware: hostFirmware{store, accepted},
+			Systemd: installer.Systemctl{}, Firmware: hostFirmware{store, accepted}, Progress: progress,
 		})
 	}
 )
@@ -159,6 +159,14 @@ func runInstall(args []string, input io.Reader, stdout, stderr io.Writer) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
+	// Progress goes to standard error as plain lines, so standard output stays one JSON result
+	// and an error stays one JSON line. A dry run is a silent check. The code is never printed.
+	progress := func(message string) {
+		if !dry {
+			_, _ = io.WriteString(stderr, "agent-firmware: "+message+"\n")
+		}
+	}
+	progress("Reading the configuration published by the authorization server")
 	discovery, cancel := context.WithTimeout(ctx, time.Minute)
 	profile, err := discover(discovery, issuer)
 	cancel()
@@ -179,8 +187,13 @@ func runInstall(args []string, input io.Reader, stdout, stderr io.Writer) int {
 			Valid bool `json:"valid"`
 		}{true})
 	}
-	if err := place(ctx, accepted, code); err != nil {
+	if err := place(ctx, accepted, code, progress); err != nil {
 		return report(stderr, err.Error(), 1)
+	}
+	if code != "" {
+		progress("Installed. The device signs in by itself and appears in your account within a minute")
+	} else {
+		progress("Installed")
 	}
 	return respond(stdout, stderr, struct {
 		Installed bool `json:"installed"`

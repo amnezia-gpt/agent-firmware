@@ -35,7 +35,8 @@ func TestInstallCommand(t *testing.T) {
 		}
 		return profile, nil
 	}
-	place = func(_ context.Context, accepted *configuration.Input, code string) error {
+	place = func(_ context.Context, accepted *configuration.Input, code string, progress func(string)) error {
+		progress("step")
 		placed++
 		held = code
 		if accepted.Profile().AuthIssuer != "https://auth.example" {
@@ -77,7 +78,22 @@ func TestInstallCommand(t *testing.T) {
 			ready, placed, held = test.ready, 0, ""
 			var stdout, stderr bytes.Buffer
 			code := run(test.args, strings.NewReader(test.input), &stdout, &stderr)
-			if code != test.code || stdout.String() != test.stdout || stderr.String() != test.stderr || placed != test.placed || held != test.held {
+			// Progress lines precede the result on standard error; an error is always its last line.
+			lines := stderr.String()
+			if test.stderr != "" {
+				if !strings.HasSuffix(lines, test.stderr) {
+					t.Fatalf("stderr=%q", lines)
+				}
+				lines = test.stderr
+			} else if strings.Contains(lines, "error_code") || test.code == 0 && test.stdout == "{\"installed\":true}\n" && !strings.Contains(lines, "agent-firmware: step\n") {
+				t.Fatalf("stderr=%q", lines)
+			} else {
+				lines = ""
+			}
+			if test.stdout == "{\"valid\":true}\n" && stderr.Len() != 0 {
+				t.Fatalf("a dry run printed progress: %q", stderr.String())
+			}
+			if code != test.code || stdout.String() != test.stdout || lines != test.stderr || placed != test.placed || held != test.held {
 				t.Fatalf("exit=%d stdout=%q stderr=%q placed=%d", code, stdout.String(), stderr.String(), placed)
 			}
 			if strings.Contains(stdout.String()+stderr.String(), installCode) {
