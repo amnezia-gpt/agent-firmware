@@ -86,5 +86,5 @@ See [PLAN.md](PLAN.md) for exact checks and limits.
 
 ## Next Action
 
-The split installation and enrollment state is available for [SELF-18](../SELF-18/ISSUE.md). Run the live
-acceptance sequence after the published schema 3 workload manifest and the SELF-19 transport are available.
+Run the live acceptance sequence with the published schema 3 workload manifest and the
+[SELF-19](../SELF-19/ISSUE.md) transport on a disposable authenticated environment.

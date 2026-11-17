@@ -55,7 +55,7 @@ list.
 - [x] A manifest that leaves the safety envelope (host mount, published port, root user, tag instead of digest,
   unknown field) is rejected before any change.
 - [x] A second, different valid manifest (other names, another service count) is applied by the same binary.
-- [ ] The pinned release file is byte-identical to the manifest the workload release published, and the release
+- [x] The pinned release file is byte-identical to the manifest the workload release published, and the release
   workflow fails otherwise.
 
 ## Defect Found In Review (2026-11-17)
@@ -83,14 +83,12 @@ See [PLAN.md](PLAN.md) for commands and limits.
 
 ## Published Manifest Checked (review, 2026-11-17)
 
-The workload release `v0.4.0` publishes a schema 3 `manifest.json`. The firmware parser accepts it unchanged
-(three services, platform `linux/amd64`, scopes `device.connectivity:create` and `responses:create`). The pinned
-`release/workload-release.json` is still the schema 2 document of `v0.3.1`. Replace it with the unmodified
-published file when the device API transport ([SELF-19](../SELF-19/ISSUE.md)) is in place. Verify the pin against
-the published bytes and confirm convergence of the real stack on a disposable host. Tagging the firmware release
-stays a manual owner step.
+The firmware pin is the unchanged schema 3 `manifest.json` asset from workload release `v0.4.0`. The asset
+has SHA-256 `13dfa6d6fe580380ba37682ca24f0d0cff55794c7847347c23b86121c3b6e9da`. The new firmware
+accepts the release and `scripts/build-release.sh` passes the exact-byte workflow check with the original
+asset. The real stack convergence criterion remains unverified on a disposable authenticated host.
 
 ## Next Action
 
-Complete the published-pin and live convergence checks with the matching workload release and SELF-19.
-SELF-16's service-start evidence remains tracked in SELF-16.
+Run the real stack convergence check with the pinned workload release. Tagging the firmware release
+stays a manual owner step. SELF-16's separate service-start evidence remains tracked in SELF-16.

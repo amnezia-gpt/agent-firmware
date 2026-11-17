@@ -18,7 +18,7 @@ import (
 // Firmware only carries it from enroll to the workload: it checks
 // the outer bounds, holds the value on tmpfs for at most an hour and never
 // redeems, logs or reports it.
-const EnrollmentCapability = "urn:amnezia-gpt:device-service:enrollment-code:v1"
+const EnrollmentCapability = "urn:agent-firmware:device-service:enrollment-code"
 const ErrEnrollmentCode Error = "invalid_enrollment_code"
 const enrollmentFile = "enrollment-code"
 const enrollmentTTL = time.Hour
@@ -219,4 +219,43 @@ func EnrollmentCodes(layout host.Layout, installation string, create bool) (*Cod
 		return nil, ErrKeystore
 	}
 	return &CodeStore{dir: base, now: time.Now}, nil
+}
+
+func ensureDir(path string, mode os.FileMode, uid, gid int) error {
+	if err := os.Mkdir(path, mode); err == nil {
+		if os.Chown(path, uid, gid) != nil || os.Chmod(path, mode) != nil {
+			return ErrKeystore
+		}
+	} else if !os.IsExist(err) {
+		return ErrKeystore
+	}
+	i, err := os.Lstat(path)
+	owner := privatefile.Owner{UID: uint32(uid), GID: uint32(gid)}
+	if err != nil || !owner.Directory(i, mode) {
+		return ErrKeystore
+	}
+	return nil
+}
+
+// Purge removes the code and staging file after the enrollment's container
+// has stopped. A foreign file prevents directory removal.
+func (s *CodeStore) Purge() error {
+	unlock, err := s.lock()
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if err := s.remove(); err != nil {
+		return err
+	}
+	if err := os.Remove(s.path() + ".new"); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return ErrKeystore
+	}
+	if err := os.Remove(s.dir); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return ErrKeystore
+	}
+	return nil
 }

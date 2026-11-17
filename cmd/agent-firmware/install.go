@@ -38,7 +38,10 @@ func (f hostFirmware) Preflight(ctx context.Context) error {
 }
 
 func (f hostFirmware) Existing() error {
-	_, err := f.store.Snapshot()
+	snapshot, err := f.store.Snapshot()
+	if snapshot.Removal != nil {
+		return configuration.ErrRemovalPending
+	}
 	if errors.Is(err, configuration.ErrMissing) {
 		return nil
 	}

@@ -1,23 +1,156 @@
 {
-  "schema_version": 2,
-  "kind": "agent-workloads-release",
-  "release": "v0.3.1",
-  "source_revision": "6a18db1ec98ad49380edf75ec3841936ac91eeca",
-  "platform": "linux/amd64",
-  "images": {
-    "openclaw-codex": {
-      "repository": "docker.io/amneziavpn/agent-workload-openclaw-codex",
-      "digest": "sha256:c125a7c8bc8cded5175536dfa7a3afd8cb1e41a808cf0fb5f85bac70b2d0279e",
-      "reference": "docker.io/amneziavpn/agent-workload-openclaw-codex@sha256:c125a7c8bc8cded5175536dfa7a3afd8cb1e41a808cf0fb5f85bac70b2d0279e",
-      "source_tag": "sha-6a18db1ec98ad49380edf75ec3841936ac91eeca",
-      "release_tag": "v0.3.1"
-    },
+  "schema_version": 3,
+  "kind": "workload-release",
+  "release": "v0.4.0",
+  "source_revision": "4501f8bcafedd550b6060f9ea171eb4702a05a9a",
+  "device_api": "urn:agent-firmware:device-api:v3",
+  "platforms": [
+    "linux/amd64"
+  ],
+  "volumes": [
+    "amgpt-device-gateway-state",
+    "codex-app-home",
+    "codex-workspace",
+    "codex-app-auth",
+    "codex-storage-home",
+    "codex-storage-workspace",
+    "codex-storage-auth"
+  ],
+  "services": {
     "amgpt-device-gateway": {
-      "repository": "docker.io/amneziavpn/agent-workload-amgpt-auth-proxy",
-      "digest": "sha256:2723e02fde12139e02dd560bd9877d07e5b18efebb97a04de739498ae784bd7d",
-      "reference": "docker.io/amneziavpn/agent-workload-amgpt-auth-proxy@sha256:2723e02fde12139e02dd560bd9877d07e5b18efebb97a04de739498ae784bd7d",
-      "source_tag": "sha-6a18db1ec98ad49380edf75ec3841936ac91eeca",
-      "release_tag": "v0.3.1"
+      "user": "65532:65532",
+      "read_only": true,
+      "environment": {
+        "AMGPT_AUTH_ISSUER": {
+          "from": "issuer"
+        },
+        "AMGPT_ROUTER_BASE_URL": {
+          "from": "resource",
+          "scope": "responses:create"
+        },
+        "AMGPT_RUNTIME_GATEWAY_BASE_URL": {
+          "from": "resource",
+          "scope": "device.connectivity:create"
+        },
+        "AMGPT_INGRESS_TRUST_BUNDLE": {
+          "from": "trust_bundle"
+        },
+        "AMGPT_INGRESS_TRUST_SHA256": {
+          "from": "trust_bundle_sha256"
+        },
+        "AMGPT_DEVICE_GATEWAY_STATE_DIR": {
+          "value": "/var/lib/amgpt-device-gateway"
+        },
+        "AMGPT_INGRESS_STATE_DIR": {
+          "value": "/var/lib/amgpt-device-gateway/ingress"
+        },
+        "AMGPT_CODEX_APP_URL": {
+          "value": "ws://codex-app-server:4500"
+        },
+        "AMGPT_CODEX_STORAGE_APP_URL": {
+          "value": "ws://codex-storage:4500"
+        },
+        "AMGPT_CODEX_STORAGE_APP_AUTH_DIR": {
+          "value": "/run/amgpt-codex-storage"
+        }
+      },
+      "volumes": [
+        {
+          "source": "amgpt-device-gateway-state",
+          "target": "/var/lib/amgpt-device-gateway"
+        },
+        {
+          "source": "codex-app-auth",
+          "target": "/run/amgpt-codex"
+        },
+        {
+          "source": "codex-storage-auth",
+          "target": "/run/amgpt-codex-storage"
+        }
+      ],
+      "health_start_seconds": 5,
+      "stop_grace_seconds": 15,
+      "image": {
+        "repository": "docker.io/amneziavpn/agent-workload-amgpt-auth-proxy",
+        "digest": "sha256:f0a102a33b3502deb6276bc675746d4c9ef5534b277923375d2bf052970b50a8"
+      }
+    },
+    "workload": {
+      "read_only": true,
+      "aliases": [
+        "codex-app-server"
+      ],
+      "depends_on": [
+        "amgpt-device-gateway"
+      ],
+      "volumes": [
+        {
+          "source": "codex-app-home",
+          "target": "/home/codex/.codex"
+        },
+        {
+          "source": "codex-workspace",
+          "target": "/codex-workspace"
+        },
+        {
+          "source": "codex-app-auth",
+          "target": "/run/amgpt-codex",
+          "read_only": true
+        }
+      ],
+      "health_start_seconds": 60,
+      "stop_grace_seconds": 20,
+      "image": {
+        "repository": "docker.io/amneziavpn/agent-workload-openclaw-codex",
+        "digest": "sha256:fa8c95a4cbd66a04f7681fe1f04b8fe99db13801df8bde9ead1a6cc2af740c38"
+      }
+    },
+    "codex-storage": {
+      "read_only": true,
+      "aliases": [
+        "codex-storage"
+      ],
+      "depends_on": [
+        "amgpt-device-gateway"
+      ],
+      "volumes": [
+        {
+          "source": "codex-storage-home",
+          "target": "/home/codex/.codex"
+        },
+        {
+          "source": "codex-storage-workspace",
+          "target": "/codex-workspace"
+        },
+        {
+          "source": "codex-storage-auth",
+          "target": "/run/amgpt-codex",
+          "read_only": true
+        }
+      ],
+      "health_start_seconds": 60,
+      "stop_grace_seconds": 20,
+      "image": {
+        "repository": "docker.io/amneziavpn/agent-workload-openclaw-codex",
+        "digest": "sha256:fa8c95a4cbd66a04f7681fe1f04b8fe99db13801df8bde9ead1a6cc2af740c38"
+      }
     }
+  },
+  "device_api_client": {
+    "service": "amgpt-device-gateway",
+    "dial": [
+      "workloadctl",
+      "dial-stdio"
+    ],
+    "enrollment_status": [
+      "workloadctl",
+      "enrollment",
+      "status"
+    ],
+    "deregister": [
+      "workloadctl",
+      "device",
+      "delete"
+    ]
   }
 }

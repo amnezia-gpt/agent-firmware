@@ -3,12 +3,10 @@
 Go host supervisor for Amnezia devices. The first feature is tracked in
 [SELF-1](.agents/plans/SELF-1/ISSUE.md).
 
-The firmware validates a schema 3 workload manifest and builds a stack from
-its services, digest-pinned images, environment and named volumes. The release
-and deployment entry points require a manifest for the Device API the binary
-serves. Device API v3 transport is tracked in
-[SELF-19](.agents/plans/SELF-19/ISSUE.md). The schema 3 fixtures can be validated
-locally while that transport and the matching workload release are prepared.
+The firmware builds a stack from a schema 3 workload manifest. It serves Device
+API v3 over an HTTP/2 stream opened into the manifest's device API client
+container. The release check compares the pinned manifest with the exact
+published bytes and verifies the API and host platform before installation.
 
 With Go 1.27.4, run:
 
@@ -50,7 +48,8 @@ state is reported as `legacy_state_layout`.
 
 `sudo agent-firmware status` uses local state only. It reports whether the device is
 not installed, manufactured and not enrolled, pending enrollment, or enrolled.
-It includes the firmware version and shows the issuer only when enrolled.
+It includes the firmware version and the manufactured device’s IDevID thumbprint.
+It shows the issuer only when enrolled.
 A directory sync failure reports `state_commit_uncertain`. Inspect status to
 learn which snapshot is visible.
 
@@ -143,6 +142,18 @@ arguments. The device release updates independently of the enrollment. The
 installer locks the lifecycle under `/run/agent-firmware-install` and journals
 the previous binary pointer, unit and device record. An installation failure
 or interrupted install restores these from the journal.
+
+To leave a domain and delete the enrollment's local data, run:
+
+```sh
+sudo agent-firmware unenroll --confirm
+```
+
+The firmware attempts deregistration, then removes the enrollment's owned
+containers, network, volumes, operational keys and local records. An unavailable
+domain is reported separately from local completion. Repeat the confirmed
+command to resume interrupted cleanup. The manufactured device keeps its
+IDevID and can enroll again without installing.
 
 Profile assembly is also available on its own and changes nothing on the host:
 

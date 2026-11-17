@@ -74,22 +74,24 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	out := &statusWriter{ResponseWriter: w}
 	op := "unknown"
 	switch r.URL.Path {
-	case "/v1/capabilities":
+	case "/v3/capabilities":
 		op = "capabilities"
-	case "/v1/crypto/seal":
+	case "/v3/identity":
+		op = "identity"
+	case "/v3/keys/signing/sign":
+		op = "sign"
+	case "/v3/keys/encryption/derive":
+		op = "derive"
+	case "/v3/crypto/seal":
 		op = "seal"
-	case "/v1/crypto/unseal":
+	case "/v3/crypto/unseal":
 		op = "unseal"
-	case "/v1/enrollment/code":
+	case "/v3/enrollment/code":
 		op = "enrollment_code"
 	}
 	defer func() {
 		outcome := "success"
 		switch {
-		case out.status == 401:
-			outcome = "unauthorized"
-		case out.status == 403:
-			outcome = "forbidden"
 		case out.status == 429:
 			outcome = "exhausted"
 		case out.status >= 500:
@@ -98,9 +100,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			outcome = "rejected"
 		}
 		h.diagnostics.record("device_api_request", op, "unary", outcome, time.Since(start))
-		if out.status == 401 || out.status == 403 {
-			h.diagnostics.record("device_api_auth", "authenticate", "check", outcome, 0)
-		}
 	}()
 	h.serve(out, r)
 }

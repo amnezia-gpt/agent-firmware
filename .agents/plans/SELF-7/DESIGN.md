@@ -1,5 +1,10 @@
 # SELF-7: Local device services API proposal
 
+The Unix-socket design below is historical. [SELF-19](../SELF-19/ISSUE.md) implements the accepted
+[Device API v3 stream](../SELF-14/DESIGN.md#device-api-v3). Runtime authorization comes from the
+firmware opening a non-root exec into its verified owned container through the Docker API. The host
+has no Device API socket or bearer-capability files.
+
 ## Status, Authority And Assumptions
 
 Draft.2 for owner and the workloads repository review, 2026-11-03. The initial draft was

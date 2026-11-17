@@ -39,7 +39,7 @@ curl -fsSLo agent-firmware-install.sh <url> && sudo sh agent-firmware-install.sh
 - `agent-firmware status`: the device state in plain terms — manufactured and not enrolled, enrollment pending, or
   enrolled with the domain's issuer — plus the firmware version and the IDevID thumbprint. Local state only.
 - `agent-firmware update`: stage 5. Needs no issuer.
-- `agent-firmware unenroll`: stage 6.
+- `agent-firmware unenroll --confirm`: stage 6.
 
 ## Stages
 
@@ -176,9 +176,9 @@ shows the new command. The joint release and one real-host check close the featu
 
 ## Window without a working installation (review of SELF-21, 2026-11-17)
 
-From SELF-21 until SELF-19 the firmware applies no stack on a real host: it accepts only a schema 3 manifest that
-asks for device API v3, while the binary still serves the earlier API, and no schema 3 manifest is published yet.
-This is deliberate and fails closed. Its consequences:
+The firmware could not apply a real stack between SELF-21 and the v3 transport in SELF-19.
+SELF-19 enables the compatible transport and pins the published schema 3 workload manifest. These
+constraints governed the intermediate branches:
 
 - Until a matching workload is published and the v3 transport is available, firmware tests for SELF-17,
   SELF-18 and SELF-20 use fake engine and workload boundaries. SELF-20 still follows SELF-19.
@@ -190,8 +190,8 @@ This is deliberate and fails closed. Its consequences:
 ## Open
 
 - **Operational key rotation.** Not designed.
-- **Long-lived exec stream.** Unproven: a day-long session with HTTP/2 PING, recovery after a workload restart,
-  and no accumulation of finished exec instances must be shown before SELF-19 is planned in detail.
+- **Long-lived exec stream.** The product owner declined the 24-hour soak on 2026-11-17. SELF-19 records
+  bounded checks for PING and restart recovery.
 
 ## Evidence and limits
 

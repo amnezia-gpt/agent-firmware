@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/amnezia-gpt/agent-firmware/internal/backendprofile"
 	"github.com/amnezia-gpt/agent-firmware/internal/configuration"
+	"github.com/amnezia-gpt/agent-firmware/internal/deviceapi"
 	"github.com/amnezia-gpt/agent-firmware/internal/discovery"
 	"github.com/amnezia-gpt/agent-firmware/internal/dockerengine"
 	"github.com/amnezia-gpt/agent-firmware/internal/service"
@@ -33,6 +33,8 @@ func lifecycle(snapshot configuration.Snapshot) string {
 	switch {
 	case snapshot.Device == nil:
 		return notInstalled
+	case snapshot.Removal != nil:
+		return enrollmentPending
 	case snapshot.Enrollment == nil:
 		return manufactured
 	case snapshot.Enrollment.Outcome != configuration.Enrolled:
@@ -87,6 +89,9 @@ func showStatus(store configuration.Store, stdout, stderr io.Writer) int {
 	}
 	state := lifecycle(snapshot)
 	message := "Device " + state + "\nFirmware " + firmwareVersion + "\n"
+	if snapshot.Device != nil {
+		message += "IDevID " + snapshot.Device.Thumbprint() + "\n"
+	}
 	if state == enrolled {
 		message += "Issuer " + snapshot.Enrollment.Profile.AuthIssuer + "\n"
 	}
@@ -97,13 +102,16 @@ func showStatus(store configuration.Store, stdout, stderr io.Writer) int {
 }
 
 func serve(parent context.Context, store configuration.Store, stdout io.Writer) error {
-	manager := &apiManager{}
-	defer manager.close()
 	notifier := (service.Systemd{Layout: hostLayout}).Notifier()
+	publishLinkStatus, finishLinkStatus := startLinkStatus(notifier)
+	manager := &apiManager{updateLinkStatus: publishLinkStatus}
+	defer func() {
+		manager.close()
+		finishLinkStatus()
+		manager.drain(stdout)
+	}()
 	event := func(value any) error {
-		data, _ := json.Marshal(value)
-		data = append(data, '\n')
-		if n, err := stdout.Write(data); err != nil || n != len(data) {
+		if !writeServiceRecord(stdout, value) {
 			return supervisor.ErrOutput
 		}
 		return nil
@@ -212,8 +220,14 @@ func executeManaged(parent context.Context, store configuration.Store, manager *
 		if err := checkDeployableRelease(snapshot.Device.Release()); err != nil {
 			return err
 		}
+		if snapshot.Removal != nil {
+			// Deregistration may use the already-connected signing service.
+			// Once teardown is journaled, never reconcile or open a new link.
+			result.Applied = true
+			return nil
+		}
 		if snapshot.Enrollment == nil {
-			manager.close()
+			manager.stop(deviceapi.LinkTargetChanged)
 			result.Applied = true
 			return nil
 		}
@@ -222,11 +236,6 @@ func executeManaged(parent context.Context, store configuration.Store, manager *
 		}
 		stack, refreshed, err := manager.stack(ctx, snapshot)
 		if err != nil {
-			return err
-		}
-		issuer := snapshot.Enrollment.Profile.AuthIssuer
-		if err := manager.ensure(session, snapshot.Device, issuer); err != nil {
-			manager.close()
 			return err
 		}
 		address, err := session.EngineAddress()
@@ -241,6 +250,17 @@ func executeManaged(parent context.Context, store configuration.Store, manager *
 		result, err = workload.Apply(ctx, engine, session, stack)
 		if err != nil {
 			return err
+		}
+		// Link readiness is independent of the workload's local convergence.
+		target, linkErr := engine.ClientTarget(ctx, stack)
+		if linkErr == nil {
+			linkErr = manager.ensure(parent, session, snapshot, address, target, stack.Client.Dial)
+		}
+		if linkErr != nil {
+			manager.stop(deviceapi.LinkTargetChanged)
+			if parent.Err() == nil {
+				manager.recordLink(manager.link.Unavailable(linkErr))
+			}
 		}
 		if refreshed != nil {
 			if err := session.RefreshEnrollment(snapshot.Enrollment, refreshed); err != nil {
@@ -258,7 +278,7 @@ func executeManaged(parent context.Context, store configuration.Store, manager *
 	if errors.Is(err, configuration.ErrRootSecret) || errors.Is(err, configuration.ErrCorrupt) ||
 		errors.Is(err, configuration.ErrMissing) || errors.Is(err, configuration.ErrRead) ||
 		errors.Is(err, configuration.ErrUnsafe) || errors.Is(err, configuration.ErrLegacy) {
-		manager.close()
+		manager.stop(deviceapi.LinkTargetChanged)
 	}
 	return result, err
 }

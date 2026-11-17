@@ -139,6 +139,7 @@ func TestServiceRefreshesMissingScopesOncePerRelease(t *testing.T) {
 }
 
 func TestReleaseGateRejectsUnavailableTransportBeforeDiscovery(t *testing.T) {
+	useUnsupportedTestTransport(t)
 	beforeDir, beforeDiscover, beforeReady := defaultStateDir, discover, hostReady
 	t.Cleanup(func() { defaultStateDir, discover, hostReady = beforeDir, beforeDiscover, beforeReady })
 	defaultStateDir = filepath.Join(t.TempDir(), "state")

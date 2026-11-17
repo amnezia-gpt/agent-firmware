@@ -69,10 +69,10 @@ func TestSealContextTamperAndRestart(t *testing.T) {
 			defer reopened.Close()
 			opened, err := reopened.Unseal(purpose, "default", sealed)
 			if tc.success {
-				if err != nil || !bytes.Equal(opened, plain) || reopened.token() != vault.token() {
+				if err != nil || !bytes.Equal(opened, plain) {
 					t.Fatal("restart lost encrypted data or changed the socket capability")
 				}
-			} else if !errors.Is(err, ErrCiphertext) || opened != nil || reopened.token() == vault.token() {
+			} else if !errors.Is(err, ErrCiphertext) || opened != nil {
 				t.Fatal("wrong installation or root secret accepted")
 			}
 		})

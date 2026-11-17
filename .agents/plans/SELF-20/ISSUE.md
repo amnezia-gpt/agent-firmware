@@ -3,11 +3,12 @@
 ## Metadata
 
 - Type: Feature / lifecycle
-- Status: Intake
+- Status: Validating (resumable cleanup implemented and deterministic checks complete)
+- Plan: [PLAN.md](PLAN.md)
 - Size / risk: Small / high (removes owner data on request)
 - Parent: [SELF-14](../SELF-14/ISSUE.md), step E of [DESIGN.md](../SELF-14/DESIGN.md)
 - Dependencies: [SELF-17](../SELF-17/ISSUE.md), [SELF-19](../SELF-19/ISSUE.md)
-- Authorization: owner asked to record the issue (2026-11-17). Implementation is not authorized yet.
+- Authorization: owner authorized execution of SELF-18, SELF-19 and SELF-20 as one group on 2026-11-17.
 
 ## Problem
 
@@ -34,12 +35,28 @@ Decommissioning the device (removing the root secret, the IDevID and the firmwar
 
 ## Acceptance Criteria
 
-- [ ] After `unenroll` the service reports awaiting enrollment, the IDevID is unchanged and no enrollment resource
+- [x] After `unenroll` the service reports awaiting enrollment, the IDevID is unchanged and no enrollment resource
   remains.
-- [ ] A following `enroll` succeeds without `install`.
-- [ ] Foreign resources with similar names are left alone.
-- [ ] The command states what will be removed and requires an explicit confirmation flag.
+- [x] A following `enroll` succeeds without `install`.
+- [x] Foreign resources with similar names are left alone.
+- [x] The command states what will be removed and requires an explicit confirmation flag.
+
+## Evidence
+
+The CLI and state tests cover explicit confirmation, a domain that is unavailable, an interrupted
+local teardown, resumption without duplicate deregistration, and manufacture-state reenrollment with
+the same IDevID. The fake Docker API test rechecks ownership and preserves foreign resources with
+similar names. The joint live check will use a disposable workload and domain.
+
+## To Confirm In The Joint Run (review, 2026-11-17)
+
+- Deregistration makes the workload authenticate to its domain, which needs the signing service of the device
+  API while `unenroll` holds the state lock. The tests use a fake engine; confirm on a host that the running
+  service keeps serving the link during `unenroll` and the result is `deregistered`, not `unavailable`.
+- When deregistration is `failed` or `unavailable` the local enrollment is still removed and the domain keeps
+  its record of the device. A following `enroll` under the same owner continues that device by its IDevID; the
+  output of `unenroll` should be enough for an operator to know the domain was not told.
 
 ## Next Action
 
-Owner selects the issue after SELF-19.
+Run the joint authenticated acceptance sequence on a disposable host.

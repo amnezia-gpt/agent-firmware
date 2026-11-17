@@ -55,6 +55,9 @@ func run(args []string, input io.Reader, stdout, stderr io.Writer) int {
 	if len(args) > 0 && args[0] == "enroll" {
 		return runEnroll(args[1:], input, stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == "unenroll" {
+		return runUnenroll(args[1:], stdout, stderr)
+	}
 	if len(args) > 0 && args[0] == "discover-profile" {
 		// The profile is assembled from the issuer's standard metadata; nothing on the host changes.
 		if len(args) != 3 || args[1] != "--issuer" {
@@ -101,8 +104,7 @@ var discover = func(ctx context.Context, issuer string) ([]byte, error) {
 	return discovery.Profile(ctx, client, issuer)
 }
 
-// The existing socket transport serves the earlier protocol. SELF-19 moves
-// this runtime gate to the v3 stream when that transport is available.
+// Keep the manifest compatibility check at each deployment entry point.
 var servedDeviceAPI = deviceapi.Protocol
 
 func checkPlatform(release workloadrelease.Release) error {

@@ -38,19 +38,13 @@ type Vault struct {
 	closed       bool
 	root         [32]byte
 	installation string
-	capability   string
 }
 
 func NewVault(installation string, key []byte) (*Vault, error) {
 	if !installationPattern.MatchString(installation) || len(key) != 32 {
 		return nil, ErrKeystore
 	}
-	token, err := hkdf.Key(sha256.New, key, nil, "agent-firmware/socket-capability/v1\n"+installation, 32)
-	if err != nil {
-		return nil, ErrKeystore
-	}
-	defer clear(token)
-	v := &Vault{installation: installation, capability: base64.RawURLEncoding.EncodeToString(token)}
+	v := &Vault{installation: installation}
 	copy(v.root[:], key)
 	return v, nil
 }
@@ -63,8 +57,6 @@ func (v *Vault) Status() string {
 	}
 	return "ready"
 }
-
-func (v *Vault) token() string { return v.capability }
 
 func (v *Vault) aad(purpose, id string) []byte {
 	data, _ := json.Marshal([]string{sealFormat, v.installation, purpose, id})

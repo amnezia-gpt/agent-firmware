@@ -43,26 +43,18 @@ func (s *StatusCommand) Run(parent context.Context, e *Engine, stack workload.St
 		}
 		s.active = ""
 	}
-	for _, spec := range stack.Specs {
-		if spec.Role != stack.Client.Service {
-			continue
-		}
-		got, err := e.api.ContainerInspect(ctx, spec.Name, client.ContainerInspectOptions{})
-		if err != nil {
-			return "", ErrEnrollmentStatus
-		}
-		container := got.Container
-		image, ok := e.images[spec.Image]
-		if !containerID.MatchString(container.ID) || container.Name != "/"+spec.Name || !state(container).Running || !ok ||
-			!matches(spec, container, image) || !validEffectiveUser(container.Config.User) {
-			return "", ErrEnrollmentStatus
-		}
-		return s.run(ctx, e, container.ID, container.Config.User, stack.Client.EnrollmentStatus)
+	target, err := e.ClientTarget(ctx, stack)
+	if err != nil {
+		return "", ErrEnrollmentStatus
 	}
-	return "", ErrEnrollmentStatus
+	return s.run(ctx, e, target.ID, target.User, stack.Client.EnrollmentStatus)
 }
 
 func (s *StatusCommand) run(ctx context.Context, e *Engine, id, user string, command []string) (EnrollmentOutcome, error) {
+	return s.control(ctx, e, id, user, command, EnrollmentComplete, EnrollmentPending, EnrollmentFailed)
+}
+
+func (s *StatusCommand) control(ctx context.Context, e *Engine, id, user string, command []string, allowed ...EnrollmentOutcome) (EnrollmentOutcome, error) {
 	exec, err := e.api.ExecCreate(ctx, id, client.ExecCreateOptions{
 		User: user, Cmd: command, AttachStdout: true, AttachStderr: true,
 	})
@@ -77,7 +69,7 @@ func (s *StatusCommand) run(ctx context.Context, e *Engine, id, user string, com
 	defer attached.Close()
 	stop := context.AfterFunc(ctx, attached.Close)
 	defer stop()
-	outcome, err := readEnrollmentStatus(attached.Reader)
+	outcome, err := readControlOutcome(attached.Reader, allowed...)
 	if err != nil {
 		return "", err
 	}
@@ -92,7 +84,7 @@ func (s *StatusCommand) run(ctx context.Context, e *Engine, id, user string, com
 	return outcome, nil
 }
 
-func readEnrollmentStatus(src io.Reader) (EnrollmentOutcome, error) {
+func readControlOutcome(src io.Reader, allowed ...EnrollmentOutcome) (EnrollmentOutcome, error) {
 	// The SDK's unbounded demultiplexer allocates the advertised frame length.
 	// Read bounded frames instead and keep stderr separate from the payload.
 	var header [8]byte
@@ -134,10 +126,11 @@ func readEnrollmentStatus(src io.Reader) (EnrollmentOutcome, error) {
 		(len(fields) != 2 || !present || reason == nil || !controlReason.MatchString(strictjson.StringField(fields, "reason"))) {
 		return "", ErrEnrollmentStatus
 	}
-	switch outcome := EnrollmentOutcome(strictjson.StringField(fields, "state")); outcome {
-	case EnrollmentPending, EnrollmentFailed, EnrollmentComplete:
-		return outcome, nil
-	default:
-		return "", ErrEnrollmentStatus
+	outcome := EnrollmentOutcome(strictjson.StringField(fields, "state"))
+	for _, value := range allowed {
+		if outcome == value {
+			return outcome, nil
+		}
 	}
+	return "", ErrEnrollmentStatus
 }

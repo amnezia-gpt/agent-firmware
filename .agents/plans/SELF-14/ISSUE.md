@@ -54,4 +54,5 @@ architectures, publisher signatures of the image, domain-delivered specified sta
 
 ## Next Action
 
-SELF-15 is complete. Execute SELF-16 before the release manifest work in SELF-21.
+Run the joint authenticated lifecycle check with the pinned workload manifest on a disposable host. The
+separate SELF-16 systemd startup check still runs at its own commit, and SELF-22 tracks Linux arm64.

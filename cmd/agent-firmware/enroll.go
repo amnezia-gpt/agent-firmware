@@ -111,6 +111,9 @@ func enrollDevice(ctx context.Context, store configuration.Store, layout host.La
 	if err != nil {
 		return err
 	}
+	if snapshot.Removal != nil {
+		return configuration.ErrRemovalPending
+	}
 	if snap := snapshot.Enrollment; snap != nil {
 		if snap.Profile.AuthIssuer != issuer {
 			return configuration.ErrIdentityConflict

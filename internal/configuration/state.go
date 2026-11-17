@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/amnezia-gpt/agent-firmware/internal/deviceidentity"
 	"github.com/amnezia-gpt/agent-firmware/internal/privatefile"
 )
 
@@ -82,6 +83,14 @@ func openFile(root *os.Root, name string, flags int) (*os.File, error) {
 type Snapshot struct {
 	Device     *Device
 	Enrollment *Enrollment
+	Removal    *Removal
+}
+
+func (s Snapshot) Identity() *deviceidentity.Access {
+	if s.Device == nil || s.Enrollment == nil {
+		return nil
+	}
+	return deviceidentity.NewAccess(s.Device.identity, s.Enrollment.keys, s.Enrollment.Profile.AuthIssuer)
 }
 
 func readRecord(root *os.Root, name string) ([]byte, error) {
@@ -105,11 +114,15 @@ func loadSnapshot(root *os.Root) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
-	enrollment, err := loadEnrollment(root)
+	enrollment, err := loadEnrollment(root, device)
 	if err != nil && !errors.Is(err, ErrMissing) {
 		return Snapshot{}, err
 	}
-	return Snapshot{Device: device, Enrollment: enrollment}, nil
+	removal, err := loadRemoval(root)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	return Snapshot{Device: device, Enrollment: enrollment, Removal: removal}, nil
 }
 
 func (s Store) Snapshot() (Snapshot, error) {

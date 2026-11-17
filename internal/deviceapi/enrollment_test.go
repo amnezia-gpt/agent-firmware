@@ -121,41 +121,36 @@ func TestEnrollmentCodeExpiresAndRejectsUnsafeFiles(t *testing.T) {
 
 func TestEnrollmentCodeRoutes(t *testing.T) {
 	v, _ := testVault(t)
-	h := NewHandler(v)
-	if callAPI(h, GatewayUID, v.token(), "GET", "/v1/enrollment/code", "").Code != 404 {
+	h := NewHandler(v, nil, nil)
+	if callAPI(h, "GET", "/v3/enrollment/code", "").Code != 404 {
 		t.Fatal("route exists without a code store")
 	}
 	s, _ := testCodes(t)
 	h.enrollment = s
-	caps := callAPI(h, GatewayUID, v.token(), "GET", "/v1/capabilities", "")
+	caps := callAPI(h, "GET", "/v3/capabilities", "")
 	if !strings.Contains(caps.Body.String(), EnrollmentCapability) {
 		t.Fatal("capability not advertised")
 	}
-	if w := callAPI(h, GatewayUID, v.token(), "GET", "/v1/enrollment/code", ""); w.Code != 404 || !strings.Contains(w.Body.String(), `"not_found"`) {
+	if w := callAPI(h, "GET", "/v3/enrollment/code", ""); w.Code != 404 || !strings.Contains(w.Body.String(), `"not_found"`) {
 		t.Fatal("absent code is not 404")
 	}
-	if callAPI(h, GatewayUID, v.token(), "DELETE", "/v1/enrollment/code", "").Code != 204 {
+	if callAPI(h, "DELETE", "/v3/enrollment/code", "").Code != 204 {
 		t.Fatal("delete of an absent code is not idempotent")
 	}
 	s.Put(exampleCode)
 	for _, c := range []struct {
-		uid    uint32
-		token  string
 		method string
 		path   string
 		body   string
 		status int
 	}{
-		{GatewayUID, "wrong", "GET", "/v1/enrollment/code", "", 401},
-		{0, v.token(), "GET", "/v1/enrollment/code", "", 403},
-		{0, v.token(), "DELETE", "/v1/enrollment/code", "", 403},
-		{GatewayUID, v.token(), "POST", "/v1/enrollment/code", "", 405},
-		{GatewayUID, v.token(), "PUT", "/v1/enrollment/code", "", 405},
-		{GatewayUID, v.token(), "GET", "/v1/enrollment/code?x=1", "", 400},
-		{GatewayUID, v.token(), "DELETE", "/v1/enrollment/code", "{}", 400},
-		{GatewayUID, v.token(), "GET", "/v1/enrollment/code/", "", 404},
+		{"POST", "/v3/enrollment/code", "", 405},
+		{"PUT", "/v3/enrollment/code", "", 405},
+		{"GET", "/v3/enrollment/code?x=1", "", 400},
+		{"DELETE", "/v3/enrollment/code", "{}", 400},
+		{"GET", "/v3/enrollment/code/", "", 404},
 	} {
-		w := callAPI(h, c.uid, c.token, c.method, c.path, c.body)
+		w := callAPI(h, c.method, c.path, c.body)
 		if w.Code != c.status || strings.Contains(w.Body.String(), exampleCode) {
 			t.Fatalf("%s %s: %d", c.method, c.path, w.Code)
 		}
@@ -163,20 +158,20 @@ func TestEnrollmentCodeRoutes(t *testing.T) {
 	if !s.Held() {
 		t.Fatal("rejected request removed the code")
 	}
-	w := callAPI(h, GatewayUID, v.token(), "GET", "/v1/enrollment/code", "")
+	w := callAPI(h, "GET", "/v3/enrollment/code", "")
 	var body map[string]string
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &body) != nil || len(body) != 1 || body["code"] != exampleCode || w.Header().Get("Cache-Control") != "no-store" {
 		t.Fatal("held code not served")
 	}
-	if w := callAPI(h, GatewayUID, v.token(), "DELETE", "/v1/enrollment/code", ""); w.Code != 204 || w.Body.Len() != 0 {
+	if w := callAPI(h, "DELETE", "/v3/enrollment/code", ""); w.Code != 204 || w.Body.Len() != 0 {
 		t.Fatal("delete failed")
 	}
-	if callAPI(h, GatewayUID, v.token(), "GET", "/v1/enrollment/code", "").Code != 404 || s.Held() {
+	if callAPI(h, "GET", "/v3/enrollment/code", "").Code != 404 || s.Held() {
 		t.Fatal("code survived delete")
 	}
 	// Diagnostics carry fixed labels only.
 	s.Put(exampleCode)
-	callAPI(h, GatewayUID, v.token(), "GET", "/v1/enrollment/code", "")
+	callAPI(h, "GET", "/v3/enrollment/code", "")
 	for len(h.diagnostics.events) > 0 {
 		b, _ := json.Marshal(<-h.diagnostics.events)
 		if strings.Contains(string(b), "enrc_") {

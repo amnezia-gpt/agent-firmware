@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"slices"
 	"strings"
@@ -40,7 +41,7 @@ func TestReadEnrollmentStatus(t *testing.T) {
 		{"truncated", statusFrame(1, `{"state":"enrolled"}`)[:16], ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			result, err := readEnrollmentStatus(bytes.NewReader(tc.body))
+			result, err := readControlOutcome(bytes.NewReader(tc.body), EnrollmentPending, EnrollmentFailed, EnrollmentComplete)
 			if string(result) != tc.want || (tc.want == "") != (err != nil) {
 				t.Fatalf("outcome=%q err=%v", result, err)
 			}
@@ -67,6 +68,11 @@ func TestEnrollmentStatusExecUsesOneBoundedUnprivilegedCommand(t *testing.T) {
 			}
 			fmt.Fprintf(w, `{"Id":%q}`, execID)
 		case strings.HasSuffix(r.URL.Path, "/exec/"+execID+"/start"):
+			if _, err := io.Copy(io.Discard, r.Body); err != nil {
+				t.Error(err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
 			conn, buf, err := w.(http.Hijacker).Hijack()
 			if err != nil {
 				t.Error(err)

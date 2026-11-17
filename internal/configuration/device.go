@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/amnezia-gpt/agent-firmware/internal/deviceidentity"
 	"github.com/amnezia-gpt/agent-firmware/internal/host"
 	"github.com/amnezia-gpt/agent-firmware/internal/strictjson"
 	"github.com/amnezia-gpt/agent-firmware/internal/workloadrelease"
@@ -19,6 +20,8 @@ type Device struct {
 	raw             []byte
 	generation      string
 	rootFingerprint string
+	identity        *deviceidentity.Device
+	sealedIdentity  string
 }
 
 type deviceRecord struct {
@@ -26,10 +29,17 @@ type deviceRecord struct {
 	Generation      string `json:"generation"`
 	Release         []byte `json:"workload_release"`
 	RootFingerprint string `json:"root_secret_sha256"`
+	Identity        string `json:"idevid_key"`
 }
 
 func (d *Device) Release() workloadrelease.Release { return d.release }
 func (d *Device) Generation() string               { return d.generation }
+func (d *Device) Thumbprint() string {
+	if d.identity == nil {
+		return ""
+	}
+	return d.identity.Public().Thumbprint
+}
 
 func ParseDevice(reader io.Reader) (*Device, error) {
 	raw, err := io.ReadAll(io.LimitReader(reader, workloadrelease.MaxBytes+1))
@@ -82,8 +92,14 @@ func loadDevice(root *os.Root) (*Device, error) {
 	if err != nil {
 		return nil, err
 	}
-	fields, ok := strictjson.Object(data, "schema_version", "generation", "workload_release", "root_secret_sha256")
-	if !ok || string(bytes.TrimSpace(fields["schema_version"])) != "1" {
+	fields, ok := strictjson.Object(data, "schema_version", "generation", "workload_release", "root_secret_sha256", "idevid_key")
+	if !ok {
+		if old, valid := strictjson.Members(data); valid && old["idevid_key"] == nil {
+			return nil, ErrRootSecret
+		}
+		return nil, ErrCorrupt
+	}
+	if string(bytes.TrimSpace(fields["schema_version"])) != "2" {
 		return nil, ErrCorrupt
 	}
 	var r deviceRecord
@@ -98,7 +114,12 @@ func loadDevice(root *os.Root) (*Device, error) {
 	if err != nil {
 		return nil, err
 	}
-	clear(secret)
+	defer clear(secret)
+	device.identity, err = deviceidentity.OpenDevice(secret, r.Identity)
+	if err != nil {
+		return nil, ErrRootSecret
+	}
+	device.sealedIdentity = r.Identity
 	device.rootFingerprint = r.RootFingerprint
 	return device, nil
 }
@@ -111,6 +132,11 @@ func (s Store) Manufacture(device *Device, guard func(*Session) error) (bool, er
 	}
 	var changed bool
 	err := s.exclusive(true, func(session *Session) error {
+		if removal, err := loadRemoval(session.root); err != nil {
+			return err
+		} else if removal != nil {
+			return ErrRemovalPending
+		}
 		pending, err := session.Read()
 		if err != nil {
 			return err
@@ -122,15 +148,15 @@ func (s Store) Manufacture(device *Device, guard func(*Session) error) (bool, er
 		if err != nil && !errors.Is(err, ErrMissing) {
 			return err
 		}
-		var fingerprint string
+		var fingerprint, identity string
 		if old != nil {
-			if _, err := loadEnrollment(session.root); err != nil && !errors.Is(err, ErrMissing) {
+			if _, err := loadEnrollment(session.root, old); err != nil && !errors.Is(err, ErrMissing) {
 				return err
 			}
 			if old.generation == device.generation {
 				return s.synchronize(session.root)
 			}
-			fingerprint = old.rootFingerprint
+			fingerprint, identity = old.rootFingerprint, old.sealedIdentity
 		} else {
 			if guard != nil {
 				if err := guard(session); err != nil {
@@ -141,8 +167,17 @@ func (s Store) Manufacture(device *Device, guard func(*Session) error) (bool, er
 			if err != nil {
 				return err
 			}
+			root, err := checkedRootSecret(session.root, fingerprint)
+			if err != nil {
+				return err
+			}
+			defer clear(root)
+			identity, err = deviceidentity.GenerateDevice(root)
+			if err != nil {
+				return ErrRootSecret
+			}
 		}
-		data, err := json.Marshal(deviceRecord{1, device.generation, device.raw, fingerprint})
+		data, err := json.Marshal(deviceRecord{2, device.generation, device.raw, fingerprint, identity})
 		if err != nil {
 			return ErrWrite
 		}

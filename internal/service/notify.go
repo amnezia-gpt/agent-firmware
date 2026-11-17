@@ -29,13 +29,32 @@ func (n *Notifier) Ready() error {
 	if n.Socket == "" || n.sent {
 		return nil
 	}
+	if err := n.send("READY=1", 2*time.Second); err != nil {
+		return err
+	}
+	n.sent = true
+	return nil
+}
+
+// Status publishes one display line without affecting readiness.
+func (n Notifier) Status(line string) error {
+	if n.Socket == "" {
+		return nil
+	}
+	if line == "" || len(line) > 128 || strings.ContainsAny(line, "\r\n\x00") {
+		return ErrNotify
+	}
+	return n.send("STATUS="+line, 100*time.Millisecond)
+}
+
+func (n Notifier) send(message string, budget time.Duration) error {
 	path := n.Socket
 	if strings.HasPrefix(path, "@") {
 		path = "\x00" + path[1:]
 	} else if !strings.HasPrefix(path, "/") {
 		return ErrNotify
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	connection, err := (&net.Dialer{}).DialContext(ctx, "unixgram", path)
 	if err != nil {
@@ -46,9 +65,8 @@ func (n *Notifier) Ready() error {
 	if connection.SetWriteDeadline(deadline) != nil {
 		return ErrNotify
 	}
-	if size, err := connection.Write([]byte("READY=1")); err != nil || size != 7 {
+	if size, err := connection.Write([]byte(message)); err != nil || size != len(message) {
 		return ErrNotify
 	}
-	n.sent = true
 	return nil
 }

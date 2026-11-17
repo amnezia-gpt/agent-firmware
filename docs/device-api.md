@@ -1,10 +1,8 @@
 # Local device services
 
-This document describes the Unix Device API delivered in SELF-16. Schema 3
-manifests require Device API v3, so the deployment gate in SELF-21 rejects them
-until the new transport is delivered in [SELF-19](../.agents/plans/SELF-19/ISSUE.md).
-The accepted v3 contract and public vectors live in
-[SELF-14](../.agents/plans/SELF-14/DESIGN.md).
+The accepted [Device API v3 contract and public vectors](../.agents/plans/SELF-14/DESIGN.md#device-api-v3)
+define the JSON fields, byte encodings and failures. A schema 3 manifest names
+the client service and its command to open the device link.
 
 ## Software root secret
 
@@ -22,26 +20,69 @@ unreadable without access to the matching key. Host root can use or copy the
 secret, and a full disk copy can clone the device. There is no TPM or hardware
 binding. Losing the secret loses the data it protects.
 
-## Socket and authorization
+## Transport and authorization
 
-Firmware owns the Unix listener under `/run/agent-firmware/<installation>/api`
-and a capability file in the sibling `auth` directory. Only Gateway gets
-read-only bind mounts of those two directories. The capability derives from
-the root secret with an HKDF label distinct from all seal keys. Gateway
-supplies it as a bearer token. Firmware also requires the peer to have UID
-65532. Unauthenticated requests cannot consume a request slot or force the
-server to read a body.
+Firmware inspects its owned client container and opens an exec by container ID
+as the container's configured non-root user, with standard streams and no TTY.
+Firmware serves HTTP/2 on that connection. Docker's stdout framing is decoded
+and stderr is discarded. The workload is the HTTP client. A host listening
+socket, host bind mounts and bearer credentials are absent from the link.
 
-The API reports `software` credential protection. The capability response
-advertises only the credential seal and enrollment-code services. No API
-operation reads workload files or opens a host volume path. The workload
-is free to detect changes to its own files.
+The link retries with backoff, checks idle connections with HTTP/2 PING and
+can reattach when the local workload restarts. The link opens independently
+of workload health and convergence. The Docker API is part of the host trust
+boundary.
+
+### Link diagnostics
+
+The firmware writes `device_api_link` events to the service journal. A
+`connected` event marks an opened attachment. An `unavailable` event reports
+why an attachment could not open. A `reconnecting` or `stopped` event records
+the session's end reason and `duration_seconds`. `reconnect_count` is the
+number of reattempts since the service started, including reattempts after a
+change of container. The initial attempt starts at zero.
+
+| Phase | Reason codes |
+| --- | --- |
+| Opening | `previous_exec_running`, `engine_unreachable`, `exec_inspect_failed`, `target_absent`, `target_not_running`, `target_unverified`, `exec_create_failed`, `exec_attach_failed`, `link_setup_failed` |
+| Session end | `keepalive_timeout`, `workload_closed`, `engine_connection_lost`, `service_stopping`, `target_changed`, `protocol_failure` |
+
+At session end, firmware inspects the dial exec for up to two seconds and
+reports `exec_outcome` as `exited_ok`, `exited_error`, `still_running` or
+`unknown`. On shutdown it makes one shorter inspection. After an orderly EOF,
+that inspection also distinguishes a reachable engine from an unavailable
+one. The `reason` describes the transport and `exec_outcome` describes the
+process. `keepalive_rtt_seconds` is the last measured server PING round trip.
+Sessions without a completed PING have no RTT sample.
+
+Firmware drains the bounded event queue on supervision cycles and shutdown.
+If the queue fills or an event cannot be written, `device_api_link_events_dropped`
+reports the cumulative `dropped_count` on the next successful journal write.
+Link diagnostics contain no request data, keys, codes, domain values or raw
+engine errors.
+
+`systemctl status agent-firmware` shows the current link state and reconnect
+count through the existing [`sd_notify` status channel](https://www.freedesktop.org/software/systemd/man/latest/sd_notify.html#STATUS=%E2%80%A6).
+The service sends updates independently of request handling and readiness.
+
+## Identity and key operations
+
+`GET /v3/identity` returns the IDevID, signing and encryption public keys as
+P-256 JWKs with RFC 7638 thumbprints, and a five-minute identity statement.
+Firmware signs that statement with the IDevID and takes its audience from the
+retained issuer. The permanent IDevID ciphertext is in device state. Two
+separate operational keys are encrypted in the enrollment record.
+
+`POST /v3/keys/signing/sign` signs the given bytes with the operational
+signing key using ES256. `POST /v3/keys/encryption/derive` returns the P-256
+ECDH result for a validated peer public key. Private keys stay inside firmware
+and the IDevID is used only to sign identity statements.
 
 ## Seal and unseal
 
-`POST /v1/crypto/seal` takes `purpose`, `record_id` and `plaintext`. The
+`POST /v3/crypto/seal` takes `purpose`, `record_id` and `plaintext`. The
 plaintext is 1–65536 bytes encoded as canonical unpadded base64url. It
-returns `sealed`. `POST /v1/crypto/unseal` takes the same `purpose` and
+returns `sealed`. `POST /v3/crypto/unseal` takes the same `purpose` and
 `record_id` plus `sealed`, and returns `plaintext`.
 
 The caller chooses an opaque purpose matching `^[a-z][a-z0-9-]{0,63}$`.
@@ -59,12 +100,12 @@ keeps no persistent invocation counter.
 
 ## Enrollment code and diagnostics
 
-`GET /v1/enrollment/code` reads the current code or returns `not_found`.
-`DELETE /v1/enrollment/code` clears it idempotently. The firmware holds it
+`GET /v3/enrollment/code` reads the current code or returns `not_found`.
+`DELETE /v3/enrollment/code` clears it idempotently. The firmware holds it
 under the installation's root-only runtime directory for at most one hour
 and never redeems it or emits it in diagnostics.
 
-The API admits up to two active requests and bounds the body size, request time
+The API admits up to two active requests per link and bounds the body size, request time
 and aggregate crypto rate. Diagnostics report bounded service operations and
 outcomes. They never contain credentials, purpose names, record identifiers,
 paths, request bodies or returned values.

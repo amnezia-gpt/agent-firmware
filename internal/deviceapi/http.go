@@ -2,7 +2,6 @@ package deviceapi
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -12,18 +11,21 @@ import (
 	"sync"
 	"time"
 
+	"github.com/amnezia-gpt/agent-firmware/internal/deviceidentity"
 	"github.com/amnezia-gpt/agent-firmware/internal/strictjson"
 )
 
-const Protocol = "urn:amnezia-gpt:device-api:v1"
-const SealCapability = "urn:amnezia-gpt:device-service:credential-seal:v1"
-const GatewayUID uint32 = 65532
+const Protocol = "urn:agent-firmware:device-api:v3"
+const SealCapability = "urn:agent-firmware:device-service:credential-seal"
+const identityCapability = "urn:agent-firmware:device-service:device-identity"
+const signingCapability = "urn:agent-firmware:device-service:signing"
+const deriveCapability = "urn:agent-firmware:device-service:key-agreement"
 const maxBody = 128 * 1024
 
-type peerKey struct{}
 type Handler struct {
 	diagnostics *diagnostics
 	vault       *Vault
+	identity    *deviceidentity.Access
 	enrollment  *CodeStore
 	unary       chan struct{}
 	mu          sync.Mutex
@@ -31,9 +33,11 @@ type Handler struct {
 	last        time.Time
 }
 
-func NewHandler(v *Vault) *Handler {
-	return &Handler{vault: v, unary: make(chan struct{}, 2), tokens: 40, last: time.Now(), diagnostics: newDiagnostics()}
+func NewHandler(v *Vault, identity *deviceidentity.Access, codes *CodeStore) *Handler {
+	return &Handler{vault: v, identity: identity, enrollment: codes, unary: make(chan struct{}, 2), tokens: 40, last: time.Now(), diagnostics: newDiagnostics()}
 }
+func (h *Handler) Events() <-chan Event { return h.diagnostics.events }
+
 func (h *Handler) cryptoAllowed() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -56,8 +60,6 @@ func reply(w http.ResponseWriter, status int, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 func failure(w http.ResponseWriter, status int, code string, retry bool) {
-	// Reject without draining an untrusted unfinished body or reusing its framing.
-	w.Header().Set("Connection", "close")
 	if status == 429 {
 		w.Header().Set("Retry-After", "1")
 	}
@@ -74,28 +76,17 @@ func failure(w http.ResponseWriter, status int, code string, retry bool) {
 func (h *Handler) serve(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	// Compare the fixed-length capability; missing/duplicate headers fail closed.
-	auth := r.Header.Values("Authorization")
-	if len(auth) != 1 || len(auth[0]) != 50 || subtle.ConstantTimeCompare([]byte(auth[0]), []byte("Bearer "+h.vault.token())) != 1 {
-		failure(w, 401, "unauthorized", false)
-		return
-	}
-	uid, ok := r.Context().Value(peerKey{}).(uint32)
-	if !ok || uid != GatewayUID {
-		failure(w, 403, "forbidden", false)
-		return
-	}
 	if r.URL.Scheme != "" || r.URL.Host != "" {
 		failure(w, 400, "invalid_request", false)
 		return
 	}
 	method, allow := "", ""
 	switch r.URL.Path {
-	case "/v1/capabilities":
+	case "/v3/capabilities", "/v3/identity":
 		method = "GET"
-	case "/v1/crypto/seal", "/v1/crypto/unseal":
+	case "/v3/crypto/seal", "/v3/crypto/unseal", "/v3/keys/signing/sign", "/v3/keys/encryption/derive":
 		method = "POST"
-	case "/v1/enrollment/code":
+	case "/v3/enrollment/code":
 		if h.enrollment == nil {
 			failure(w, 404, "not_found", false)
 			return
@@ -143,8 +134,23 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		switch {
-		case r.URL.Path == "/v1/capabilities":
+		case r.URL.Path == "/v3/capabilities":
 			h.capabilities(w)
+		case r.URL.Path == "/v3/identity":
+			if !h.cryptoAllowed() {
+				failure(w, 429, "resource_exhausted", true)
+				return
+			}
+			if h.identity == nil {
+				cryptoFailure(w, ErrKeystore)
+				return
+			}
+			value, err := h.identity.Identity(time.Now())
+			if err != nil {
+				cryptoFailure(w, err)
+				return
+			}
+			reply(w, 200, value)
 		case method == "DELETE":
 			// The workload acknowledges the code it received.
 			if h.enrollment.deleteForWorkload() != nil {
@@ -185,8 +191,12 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if r.URL.Path == "/v3/keys/signing/sign" || r.URL.Path == "/v3/keys/encryption/derive" {
+		h.keyOperation(w, r.URL.Path, b)
+		return
+	}
 	field := "plaintext"
-	if r.URL.Path == "/v1/crypto/unseal" {
+	if r.URL.Path == "/v3/crypto/unseal" {
 		field = "sealed"
 	}
 	fields, valid := strictjson.Object(b, "purpose", "record_id", field)
@@ -227,14 +237,14 @@ func cryptoFailure(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrCiphertext):
 		failure(w, 422, string(ErrCiphertext), false)
-	case errors.Is(err, ErrRequest):
+	case errors.Is(err, ErrRequest) || errors.Is(err, deviceidentity.ErrInput):
 		failure(w, 400, string(ErrRequest), false)
 	default:
 		failure(w, 503, string(ErrKeystore), true)
 	}
 }
 func (h *Handler) capabilities(w http.ResponseWriter) {
-	capabilities := []string{SealCapability}
+	capabilities := []string{SealCapability, identityCapability, signingCapability, deriveCapability}
 	if h.enrollment != nil {
 		capabilities = append(capabilities, EnrollmentCapability)
 	}
@@ -243,4 +253,50 @@ func (h *Handler) capabilities(w http.ResponseWriter) {
 		"capabilities":          capabilities,
 		"credential_protection": map[string]string{"state": h.vault.Status(), "protection": "software"},
 	})
+}
+
+func (h *Handler) keyOperation(w http.ResponseWriter, path string, raw []byte) {
+	if h.identity == nil {
+		cryptoFailure(w, ErrKeystore)
+		return
+	}
+	if path == "/v3/keys/signing/sign" {
+		fields, valid := strictjson.Object(raw, "algorithm", "input")
+		value := strictjson.StringField(fields, "input")
+		if !valid || strictjson.StringField(fields, "algorithm") != "ES256" ||
+			len(value) > base64.RawURLEncoding.EncodedLen(deviceidentity.MaxSignInput) {
+			cryptoFailure(w, ErrRequest)
+			return
+		}
+		input, err := decode(value)
+		if err != nil {
+			cryptoFailure(w, err)
+			return
+		}
+		defer clear(input)
+		sig, err := h.identity.Sign(input)
+		if err != nil {
+			cryptoFailure(w, err)
+			return
+		}
+		reply(w, 200, map[string]string{"signature": base64.RawURLEncoding.EncodeToString(sig)})
+		return
+	}
+	fields, valid := strictjson.Object(raw, "algorithm", "peer_public_key")
+	point, validPoint := strictjson.Object(fields["peer_public_key"], "kty", "crv", "x", "y")
+	if !valid || !validPoint || strictjson.StringField(fields, "algorithm") != "ECDH" {
+		cryptoFailure(w, ErrRequest)
+		return
+	}
+	peer := deviceidentity.JWK{
+		Type: strictjson.StringField(point, "kty"), Curve: strictjson.StringField(point, "crv"),
+		X: strictjson.StringField(point, "x"), Y: strictjson.StringField(point, "y"),
+	}
+	secret, err := h.identity.Derive(peer)
+	if err != nil {
+		cryptoFailure(w, err)
+		return
+	}
+	defer clear(secret)
+	reply(w, 200, map[string]string{"shared_secret": base64.RawURLEncoding.EncodeToString(secret)})
 }

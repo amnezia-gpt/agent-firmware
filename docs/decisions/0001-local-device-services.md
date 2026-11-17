@@ -2,14 +2,15 @@
 
 ## Status
 
-Proposed, 2026-11-03. No implementation or architecture approval is implied.
+Superseded by the accepted
+[Device API v3 stream](../../.agents/plans/SELF-14/DESIGN.md#device-api-v3).
+The following proposal records the historical Unix-socket design.
 Tracked by [SELF-7](../../.agents/plans/SELF-7/ISSUE.md); the proposed contract is
 [DESIGN.md](../../.agents/plans/SELF-7/DESIGN.md). Wider attack analysis is a
 separate [SELF-8](../../.agents/plans/SELF-8/ISSUE.md).
 
 Firmware implementation was subsequently authorized separately against reviewed
-draft.2; see [implementation and evidence](../device-api.md). This ADR remains
-Proposed pending its own review.
+draft.2. [Current implementation](../device-api.md) uses the v3 stream.
 
 ## Context
 
