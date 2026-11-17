@@ -743,7 +743,7 @@
       "type": "string",
       "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]{86}$",
       "maxLength": 2048,
-      "description": "Compact JWS. Header: alg ES256, typ device-identity+jwt, jwk = the IDevID public key. Claims: iss and sub = IDevID thumbprint; aud = issuer of the enrollment; iat; exp = iat + 300; jti (16 random bytes, base64url); cnf.jkt = thumbprint of signing_key. Signed with the IDevID key."
+      "description": "Compact JWS. Header: alg ES256, typ device-identity+jwt, jwk = the IDevID public key. Claims: iss and sub = IDevID thumbprint; aud = issuer of the enrollment; iat; exp = iat + 300; jti (canonical unpadded base64url of 16 to 32 random bytes; the firmware issues 16, a verifier accepts the range); cnf.jkt = thumbprint of signing_key. Signed with the IDevID key."
      }
     },
     "example": {

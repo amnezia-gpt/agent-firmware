@@ -135,7 +135,8 @@ carries client metadata asserted by a trusted party, not a self-signed key bindi
 - Header: `alg` `ES256`; `typ` `device-identity+jwt`; `jwk` with the IDevID public key (self-contained, as a DPoP
   proof, RFC 9449).
 - Claims: `iss` and `sub` are the RFC 7638 thumbprint of the IDevID key; `aud` is the issuer; `iat`, `exp` (five
-  minutes); `jti`; `cnf.jkt` is the thumbprint of the operational signing key (RFC 7800).
+  minutes); `jti` (16 to 32 random bytes, base64url; the firmware issues 16, a verifier accepts the range, and the
+  shared vector carries 20); `cnf.jkt` is the thumbprint of the operational signing key (RFC 7800).
 - Only the signing key is bound. The encryption key is enrolled by the workload separately.
 - The statement grants nothing. Ownership comes only from the code the owner obtained. A captured statement names
   a key its captor does not hold.
