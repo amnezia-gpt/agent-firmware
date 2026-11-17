@@ -1,0 +1,374 @@
+{
+ "description": "Test vectors for the workload release manifest, schema 3. 'valid' is accepted. Each rejection applies one change to 'valid' (set: JSON Pointer to new value; remove: JSON Pointer) and must be refused before any change on the host. layer says whether the JSON Schema alone refuses it or a semantic rule of SELF-21 DESIGN.md. Names are examples; the firmware knows none of them.",
+ "valid": {
+  "schema_version": 3,
+  "kind": "workload-release",
+  "release": "v1.2.3",
+  "source_revision": "0123456789abcdef0123456789abcdef01234567",
+  "device_api": "urn:agent-firmware:device-api:v3",
+  "platforms": [
+   "linux/amd64",
+   "linux/arm64"
+  ],
+  "volumes": [
+   "front-state",
+   "worker-home",
+   "worker-auth"
+  ],
+  "services": {
+   "front": {
+    "image": {
+     "repository": "registry.example/acme/front",
+     "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "user": "65532:65532",
+    "aliases": [
+     "front"
+    ],
+    "environment": {
+     "AUTH_ISSUER": {
+      "from": "issuer"
+     },
+     "TRUST_BUNDLE": {
+      "from": "trust_bundle"
+     },
+     "TRUST_SHA256": {
+      "from": "trust_bundle_sha256"
+     },
+     "API_BASE_URL": {
+      "from": "resource",
+      "scope": "example:use"
+     },
+     "STATE_DIR": {
+      "value": "/var/lib/front"
+     }
+    },
+    "volumes": [
+     {
+      "source": "front-state",
+      "target": "/var/lib/front"
+     },
+     {
+      "source": "worker-auth",
+      "target": "/run/worker-auth"
+     }
+    ],
+    "health_start_seconds": 5,
+    "stop_grace_seconds": 15
+   },
+   "worker": {
+    "image": {
+     "repository": "registry.example/acme/worker",
+     "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "read_only": true,
+    "aliases": [
+     "worker"
+    ],
+    "depends_on": [
+     "front"
+    ],
+    "volumes": [
+     {
+      "source": "worker-home",
+      "target": "/home/worker"
+     },
+     {
+      "source": "worker-auth",
+      "target": "/run/worker-auth",
+      "read_only": true
+     }
+    ],
+    "health_start_seconds": 60,
+    "stop_grace_seconds": 20
+   }
+  },
+  "device_api_client": {
+   "service": "front",
+   "dial": [
+    "frontctl",
+    "dial-stdio"
+   ],
+   "enrollment_status": [
+    "frontctl",
+    "enrollment",
+    "status"
+   ],
+   "deregister": [
+    "frontctl",
+    "deregister"
+   ]
+  }
+ },
+ "reject": [
+  {
+   "reason": "unknown top-level member",
+   "layer": "schema",
+   "set": {
+    "/ports": [
+     "443:443"
+    ]
+   }
+  },
+  {
+   "reason": "unknown service member (published port)",
+   "layer": "schema",
+   "set": {
+    "/services/front/ports": [
+     "443:443"
+    ]
+   }
+  },
+  {
+   "reason": "unknown service member (privileged)",
+   "layer": "schema",
+   "set": {
+    "/services/front/privileged": true
+   }
+  },
+  {
+   "reason": "image by tag instead of digest",
+   "layer": "schema",
+   "set": {
+    "/services/front/image": {
+     "repository": "registry.example/acme/front",
+     "tag": "latest"
+    }
+   }
+  },
+  {
+   "reason": "repository carries a tag",
+   "layer": "schema",
+   "set": {
+    "/services/front/image/repository": "registry.example/acme/front:latest"
+   }
+  },
+  {
+   "reason": "root user",
+   "layer": "schema",
+   "set": {
+    "/services/front/user": "0:0"
+   }
+  },
+  {
+   "reason": "named user instead of numeric",
+   "layer": "schema",
+   "set": {
+    "/services/front/user": "root"
+   }
+  },
+  {
+   "reason": "host path as a volume source",
+   "layer": "schema",
+   "set": {
+    "/services/front/volumes/0/source": "/var/run/docker.sock"
+   }
+  },
+  {
+   "reason": "relative mount target",
+   "layer": "schema",
+   "set": {
+    "/services/front/volumes/0/target": "var/lib/front"
+   }
+  },
+  {
+   "reason": "mount target with a parent reference",
+   "layer": "semantic",
+   "set": {
+    "/services/front/volumes/0/target": "/var/../etc"
+   }
+  },
+  {
+   "reason": "free-form template in an environment value source",
+   "layer": "schema",
+   "set": {
+    "/services/front/environment/AUTH_ISSUER": {
+     "from": "env:HOME"
+    }
+   }
+  },
+  {
+   "reason": "environment value given as a bare string",
+   "layer": "schema",
+   "set": {
+    "/services/front/environment/STATE_DIR": "/var/lib/front"
+   }
+  },
+  {
+   "reason": "resource source without a scope",
+   "layer": "schema",
+   "set": {
+    "/services/front/environment/API_BASE_URL": {
+     "from": "resource"
+    }
+   }
+  },
+  {
+   "reason": "unsupported platform",
+   "layer": "schema",
+   "set": {
+    "/platforms": [
+     "windows/amd64"
+    ]
+   }
+  },
+  {
+   "reason": "unsupported device API version",
+   "layer": "schema",
+   "set": {
+    "/device_api": "urn:agent-firmware:device-api:v2"
+   }
+  },
+  {
+   "reason": "earlier schema version",
+   "layer": "schema",
+   "set": {
+    "/schema_version": 2
+   }
+  },
+  {
+   "reason": "no device API client",
+   "layer": "schema",
+   "remove": "/device_api_client"
+  },
+  {
+   "reason": "control command through a shell string",
+   "layer": "schema",
+   "set": {
+    "/device_api_client/dial": "frontctl dial-stdio"
+   }
+  },
+  {
+   "reason": "volume used but not declared",
+   "layer": "semantic",
+   "set": {
+    "/services/worker/volumes/0/source": "undeclared"
+   }
+  },
+  {
+   "reason": "volume declared but never used",
+   "layer": "semantic",
+   "set": {
+    "/volumes": [
+     "front-state",
+     "worker-home",
+     "worker-auth",
+     "spare"
+    ]
+   }
+  },
+  {
+   "reason": "dependency on an unknown service",
+   "layer": "semantic",
+   "set": {
+    "/services/worker/depends_on": [
+     "missing"
+    ]
+   }
+  },
+  {
+   "reason": "dependency cycle",
+   "layer": "semantic",
+   "set": {
+    "/services/front/depends_on": [
+     "worker"
+    ]
+   }
+  },
+  {
+   "reason": "service depends on itself",
+   "layer": "semantic",
+   "set": {
+    "/services/worker/depends_on": [
+     "worker"
+    ]
+   }
+  },
+  {
+   "reason": "device API client names an unknown service",
+   "layer": "semantic",
+   "set": {
+    "/device_api_client/service": "missing"
+   }
+  },
+  {
+   "reason": "same alias on two services",
+   "layer": "semantic",
+   "set": {
+    "/services/worker/aliases": [
+     "front"
+    ]
+   }
+  },
+  {
+   "reason": "alias equal to another service's name",
+   "layer": "semantic",
+   "set": {
+    "/services/front/aliases": [
+     "worker"
+    ]
+   }
+  },
+  {
+   "reason": "two volumes at one target in a service",
+   "layer": "semantic",
+   "set": {
+    "/services/front/volumes/1/target": "/var/lib/front"
+   }
+  },
+  {
+   "reason": "one volume mounted twice in a service",
+   "layer": "semantic",
+   "set": {
+    "/services/front/volumes/1/source": "front-state"
+   }
+  },
+  {
+   "reason": "mount target inside another mount target",
+   "layer": "semantic",
+   "set": {
+    "/services/front/volumes/1/target": "/var/lib/front/auth"
+   }
+  },
+  {
+   "reason": "mount target that the firmware reserves",
+   "layer": "semantic",
+   "set": {
+    "/services/front/volumes/1/target": "/tmp"
+   }
+  }
+ ],
+ "control_results": {
+  "accept": [
+   {
+    "state": "enrolled"
+   },
+   {
+    "state": "pending",
+    "reason": "redeeming"
+   },
+   {
+    "state": "failed",
+    "reason": "code_refused"
+   },
+   {
+    "state": "deregistered"
+   }
+  ],
+  "treat_as_unavailable": [
+   "",
+   "not json",
+   {
+    "state": "ready"
+   },
+   {
+    "state": "enrolled",
+    "detail": "x"
+   },
+   {
+    "state": "failed",
+    "reason": "Has Spaces"
+   }
+  ]
+ }
+}

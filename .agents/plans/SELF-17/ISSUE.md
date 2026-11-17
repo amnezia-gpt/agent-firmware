@@ -6,7 +6,7 @@
 - Status: Intake
 - Size / risk: Large / high (the root-side transaction and the saved state are split)
 - Parent: [SELF-14](../SELF-14/ISSUE.md), step C1 of [DESIGN.md](../SELF-14/DESIGN.md)
-- Dependencies: [SELF-16](../SELF-16/ISSUE.md)
+- Dependencies: [SELF-16](../SELF-16/ISSUE.md), [SELF-21](../SELF-21/ISSUE.md)
 - Authorization: owner asked to record the issue (2026-11-17). Implementation is not authorized yet.
 
 ## Problem

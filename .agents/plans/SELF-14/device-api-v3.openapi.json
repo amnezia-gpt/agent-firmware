@@ -2,11 +2,11 @@
  "openapi": "3.1.0",
  "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
  "info": {
-  "title": "Firmware device services API v3 (PROPOSED)",
+  "title": "Firmware device services API v3",
   "version": "3.0.0-draft.1",
-  "description": "SELF-14 draft. HTTP/2 JSON on a stream the firmware opens into the workload container (an exec running the workload's dial-stdio command; HTTP/2 with prior knowledge, no TLS). The firmware is the server and the workload the client. There is no host listener and no access token: only a holder of the container engine API can open the stream. The workload keeps one session; a new one replaces the previous one. Read SELF-14 DESIGN.md for the trust model and lifecycle."
+  "description": "SELF-14, accepted by the owner on 2026-11-17; not implemented yet. HTTP/2 JSON on a stream the firmware opens into the workload container (an exec running the workload's dial-stdio command; HTTP/2 with prior knowledge, no TLS). The firmware is the server and the workload the client. There is no host listener and no access token: only a holder of the container engine API can open the stream. The workload keeps one session; a new one replaces the previous one. Read SELF-14 DESIGN.md for the trust model and lifecycle."
  },
- "x-status": "proposed",
+ "x-status": "accepted",
  "servers": [
   {
    "url": "http://firmware.local",
@@ -279,7 +279,7 @@
       }
      }
     },
-    "description": "Reject a syntactically valid but unadvertised/unauthorized purpose as 400 unsupported_purpose; never create a new namespace implicitly."
+    "description": "The purpose is an opaque label of the allowed syntax; a malformed one is invalid_request."
    }
   },
   "/v3/crypto/unseal": {
@@ -342,7 +342,7 @@
       }
      }
     },
-    "description": "Reject a syntactically valid but unadvertised/unauthorized purpose as 400 unsupported_purpose; never create a new namespace implicitly."
+    "description": "The purpose is an opaque label of the allowed syntax; a malformed one is invalid_request."
    }
   },
   "/v3/enrollment/code": {
@@ -458,12 +458,7 @@
      ],
      "credential_protection": {
       "state": "ready",
-      "protection": "software",
-      "purposes": [
-       "gateway-session",
-       "registration-management",
-       "mcp-oauth"
-      ]
+      "protection": "software"
      }
     },
     "description": "Exact fields, open capability identifiers."
@@ -473,8 +468,7 @@
     "additionalProperties": false,
     "required": [
      "state",
-     "protection",
-     "purposes"
+     "protection"
     ],
     "properties": {
      "state": {
@@ -490,16 +484,6 @@
        "software"
       ],
       "description": "A root secret held in a root-only file. No hardware binding is claimed."
-     },
-     "purposes": {
-      "type": "array",
-      "minItems": 1,
-      "maxItems": 32,
-      "uniqueItems": true,
-      "items": {
-       "$ref": "#/components/schemas/Purpose"
-      },
-      "description": "Purposes supported for this enrollment. Initial catalog: gateway-session, registration-management, mcp-oauth."
      }
     }
    },
@@ -633,8 +617,7 @@
          "ciphertext_rejected",
          "resource_exhausted",
          "internal_error",
-         "keystore_unavailable",
-         "unsupported_purpose"
+         "keystore_unavailable"
         ]
        },
        "retryable": {
@@ -663,7 +646,7 @@
     "pattern": "^[a-z][a-z0-9-]{0,63}$",
     "minLength": 1,
     "maxLength": 64,
-    "description": "Extensible identifier. The server accepts only purposes it advertises; syntax alone does not grant access."
+    "description": "Opaque label chosen by the client. Any value of this syntax is accepted and selects its own derived key; the firmware keeps no list."
    },
    "EnrollmentCode": {
     "type": "object",
@@ -881,7 +864,7 @@
   },
   "responses": {
    "Error400": {
-    "description": "invalid_request or unsupported_purpose (not retryable)",
+    "description": "invalid_request (not retryable)",
     "content": {
      "application/json": {
       "schema": {

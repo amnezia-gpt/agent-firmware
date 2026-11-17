@@ -41,8 +41,8 @@ The field-level contract is drafted in
 [device-api-v3.openapi.json](../SELF-14/device-api-v3.openapi.json) with public test vectors in
 [device-api-v3.vectors.json](../SELF-14/device-api-v3.vectors.json): field names, types and encodings for public
 keys, the identity statement, ES256 signatures and ECDH inputs and outputs, the errors and limits that carry over,
-and rejection cases for the statement. The firmware owns this contract and consumers copy it. It is a proposal
-until the owner accepts it; identity work implements it and SELF-19 connects the routes to the transport.
+and rejection cases for the statement. The firmware owns this contract and consumers copy it. The owner accepted it on
+2026-11-17; identity work implements it and SELF-19 connects the routes to the transport.
 
 ## Acceptance Criteria
 

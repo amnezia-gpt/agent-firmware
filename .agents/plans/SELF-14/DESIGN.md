@@ -98,7 +98,7 @@ engine API, which the firmware alone uses. Error format and admission limits sta
 | `POST /v3/crypto/seal`, `/unseal` | encryption of workload records | as today |
 | `GET`, `DELETE /v3/enrollment/code` | one-time code hand-over | as today |
 
-Field-level contract: [device-api-v3.openapi.json](device-api-v3.openapi.json) (proposed, draft 1) with public test
+Field-level contract: [device-api-v3.openapi.json](device-api-v3.openapi.json) (accepted) with public test
 vectors in [device-api-v3.vectors.json](device-api-v3.vectors.json). The firmware owns this contract; consumers
 copy it with its source noted. What the schema fixes beyond the table:
 
@@ -161,7 +161,8 @@ Agreed before code: the device API v3 above, the identity statement above, the c
 | --- | --- | --- |
 | A | [SELF-15](../SELF-15/ISSUE.md) platform seams, no behavior change | nothing |
 | B | [SELF-16](../SELF-16/ISSUE.md) remove legacy contracts; software root secret | A |
-| C1 | [SELF-17](../SELF-17/ISSUE.md) separate `install` and `enroll` | B |
+| B2 | [SELF-21](../SELF-21/ISSUE.md) workload stack from the release manifest | B |
+| C1 | [SELF-17](../SELF-17/ISSUE.md) separate `install` and `enroll` | B, B2 |
 | C2 | [SELF-18](../SELF-18/ISSUE.md) identities and key custody | B, C1 |
 | D | [SELF-19](../SELF-19/ISSUE.md) device API v3 over the stream | C2 |
 | E | [SELF-20](../SELF-20/ISSUE.md) `unenroll` | C1, D |

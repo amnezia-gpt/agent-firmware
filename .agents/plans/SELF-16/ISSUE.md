@@ -31,6 +31,8 @@ which per-purpose keys are derived.
 - Seal and unseal: per-purpose keys by HKDF-SHA256 from the root secret, AES-256-GCM with a random nonce, standard
   library only. Remove the durable counter, its reservation and its lock. Document the 2^32 bound per derived key.
 - The envelope carries a format identifier so a later scheme can be introduced.
+- Seal purposes are opaque labels: any purpose of the allowed syntax is accepted and selects its own derived key.
+  The firmware keeps no list of purposes and advertises none.
 - Remove the agent configuration watch: the route and service, the inotify reader and its fallback, the lookup
   of the workload volume's host path, and the related capability fields. The firmware reads no workload data.
 
@@ -43,7 +45,8 @@ hardware-backed protection.
 
 - [ ] The state directory holds no floor, no initialization lock and no wrapped credential.
 - [ ] A missing, unreadable or wrong root secret fails closed and is never regenerated over existing data.
-- [ ] Seal and unseal round-trip; a wrong purpose, record ID, key or tag is rejected with one error.
+- [ ] Seal and unseal round-trip; a wrong purpose, record ID, key or tag is rejected with one error. No purpose
+  name appears in the firmware source.
 - [ ] The unit starts without credential directives.
 - [ ] No code path opens a workload volume from the host, and capabilities advertise no configuration watch.
 - [ ] Documentation states what the software root secret does and does not protect against.
