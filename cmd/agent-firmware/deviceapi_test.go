@@ -11,7 +11,11 @@ import (
 func TestAPIKeyCommandsCheckRootAndExistingConfiguration(t *testing.T) {
 	for _, cmd := range []string{"device-api-init", "prepare-device-api", "enrollment-code-set", "enrollment-code-clear"} {
 		var out, err bytes.Buffer
-		code := run([]string{cmd, "--state-dir", filepath.Join(t.TempDir(), "absent")}, strings.NewReader(""), &out, &err)
+		input := ""
+		if cmd == "enrollment-code-set" {
+			input = "enrc_" + strings.Repeat("A", 43)
+		}
+		code := run([]string{cmd, "--state-dir", filepath.Join(t.TempDir(), "absent")}, strings.NewReader(input), &out, &err)
 		want := "not_configured"
 		if os.Geteuid() != 0 {
 			want = "root_required"

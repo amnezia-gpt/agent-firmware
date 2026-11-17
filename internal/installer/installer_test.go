@@ -8,21 +8,25 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	hostplatform "github.com/amnezia-gpt/agent-firmware/internal/host"
+	"github.com/amnezia-gpt/agent-firmware/internal/service"
 )
 
 const testCode = "enrc_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopq"
 
 // host is a private tree standing in for the system paths, with recording fakes.
 type host struct {
-	t        *testing.T
-	layout   Layout
-	calls    []string
-	active   bool
-	enabled  bool
-	fragment string
-	fail     map[string]bool
-	api      bool
-	code     string
+	t                  *testing.T
+	layout             hostplatform.Layout
+	calls              []string
+	active             bool
+	enabled            bool
+	fragment           string
+	fail               map[string]bool
+	api                bool
+	code               string
+	writeEngineAddress bool
 }
 
 func newHost(t *testing.T) *host {
@@ -34,11 +38,12 @@ func newHost(t *testing.T) *host {
 	}
 	stat := info.Sys().(*syscall.Stat_t)
 	h := &host{t: t, fail: map[string]bool{}, api: true}
-	h.layout = Layout{
+	h.layout = hostplatform.Layout{
 		Base:    filepath.Join(root, "lib", "agent-firmware"),
 		Wrapper: filepath.Join(root, "bin", "agent-firmware"),
 		Unit:    filepath.Join(root, "systemd", "agent-firmware.service"),
 		State:   filepath.Join(root, "state"),
+		Runtime: filepath.Join(root, "run", "agent-firmware"),
 		Lock:    filepath.Join(root, "lock"),
 		DropIns: []string{filepath.Join(root, "systemd", "agent-firmware.service.d")},
 		Parents: []string{filepath.Join(root, "lib"), filepath.Join(root, "bin"), filepath.Join(root, "systemd")},
@@ -56,7 +61,23 @@ func newHost(t *testing.T) *host {
 	return h
 }
 
-func (h *host) Do(_ context.Context, verb string) error {
+func (h *host) Definition(api bool) []byte {
+	return (service.Systemd{Layout: h.layout}).Definition(api)
+}
+func (h *host) Owns(data []byte) bool { return (service.Systemd{Layout: h.layout}).Owns(data) }
+func (h *host) SupportsDeviceAPI(data []byte) bool {
+	return (service.Systemd{Layout: h.layout}).SupportsDeviceAPI(data)
+}
+func (h *host) Stop(ctx context.Context) error   { return h.do(ctx, "stop") }
+func (h *host) Start(ctx context.Context) error  { return h.do(ctx, "start") }
+func (h *host) Reload(ctx context.Context) error { return h.do(ctx, "daemon-reload") }
+func (h *host) SetEnabled(ctx context.Context, enabled bool) error {
+	if enabled {
+		return h.do(ctx, "enable")
+	}
+	return h.do(ctx, "disable")
+}
+func (h *host) do(_ context.Context, verb string) error {
 	h.calls = append(h.calls, "systemd "+verb)
 	if h.fail[verb] {
 		return errors.New("failed")
@@ -93,6 +114,14 @@ func (h *host) Configure() error {
 	if err := os.MkdirAll(h.layout.State, 0o700); err != nil {
 		return err
 	}
+	if h.writeEngineAddress {
+		path := filepath.Join(h.layout.State, hostplatform.EngineState)
+		if !lexists(path) {
+			if err := write(path, []byte("test engine\n"), 0600); err != nil {
+				return err
+			}
+		}
+	}
 	return replace(filepath.Join(h.layout.State, "accepted.json"), []byte("new\n"), 0o600)
 }
 func (h *host) PrepareAPI(context.Context) (bool, error) { return h.api, h.result("prepare-api") }
@@ -119,7 +148,7 @@ func (h *host) install(content, code string) error {
 		h.t.Fatal(err)
 	}
 	h.calls = nil
-	return Install(context.Background(), Request{Layout: h.layout, Binary: binary, Code: code, Systemd: h, Firmware: h})
+	return Install(context.Background(), Request{Layout: h.layout, Binary: binary, Code: code, Services: h, Firmware: h})
 }
 
 func (h *host) read(path string) string {
@@ -163,7 +192,7 @@ func TestFreshInstallation(t *testing.T) {
 		t.Fatalf("wrapper -> %q", target)
 	}
 	unit := h.read(h.layout.Unit)
-	if !strings.HasPrefix(unit, unitMarker+"\n") || !strings.Contains(unit, credential+"\nExecStart=") {
+	if !strings.HasPrefix(unit, service.UnitMarker+"\n") || !strings.Contains(unit, ("LoadCredentialEncrypted=device-api-key:"+filepath.Join(h.layout.State, "device-api", "key.cred"))+"\nExecStart=") {
 		t.Fatalf("unit:\n%s", unit)
 	}
 	if info, _ := os.Stat(h.layout.Unit); info.Mode().Perm() != 0o644 {
@@ -274,11 +303,11 @@ func TestInterruptedTransactionIsRecoveredByTheNextRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A killed installer leaves a prepared transaction and a half-switched host.
-	r := &run{Request: Request{Layout: h.layout, Systemd: h, Firmware: h}, transaction: filepath.Join(h.layout.Base, ".transaction")}
+	r := &run{Request: Request{Layout: h.layout, Services: h, Firmware: h}, transaction: filepath.Join(h.layout.Base, ".transaction")}
 	if err := r.prepare(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(h.layout.Unit, []byte(unitMarker+"\nbroken\n"), 0o644); err != nil {
+	if err := os.WriteFile(h.layout.Unit, []byte(service.UnitMarker+"\nbroken\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	h.active = false
@@ -357,7 +386,7 @@ func TestInterruptionRollsBack(t *testing.T) {
 	if err := os.WriteFile(binary, []byte("version one"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	err := Install(ctx, Request{Layout: h.layout, Binary: binary, Systemd: h, Firmware: h})
+	err := Install(ctx, Request{Layout: h.layout, Binary: binary, Services: h, Firmware: h})
 	if err != ErrInterrupted || lexists(h.layout.Unit) || h.active {
 		t.Fatal(err)
 	}
@@ -370,7 +399,7 @@ func TestProgressNamesTheStepsAndNeverTheCode(t *testing.T) {
 		t.Fatal(err)
 	}
 	var lines []string
-	request := Request{Layout: h.layout, Binary: binary, Code: testCode, Systemd: h, Firmware: h, Progress: func(m string) { lines = append(lines, m) }}
+	request := Request{Layout: h.layout, Binary: binary, Code: testCode, Services: h, Firmware: h, Progress: func(m string) { lines = append(lines, m) }}
 	if err := Install(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
@@ -382,11 +411,41 @@ func TestProgressNamesTheStepsAndNeverTheCode(t *testing.T) {
 	h2 := newHost(t)
 	h2.fail["dies"] = true
 	lines = nil
-	request.Layout, request.Systemd, request.Firmware = h2.layout, h2, h2
+	request.Layout, request.Services, request.Firmware = h2.layout, h2, h2
 	if err := Install(context.Background(), request); err != ErrStart {
 		t.Fatal(err)
 	}
 	if last := lines[len(lines)-1]; last != "Installation failed, restoring the previous state" {
 		t.Fatal(last)
+	}
+}
+
+func TestFailedInstallRollsBackOnlyNewEngineAddress(t *testing.T) {
+	for _, existing := range []bool{false, true} {
+		name := "new record"
+		if existing {
+			name = "existing record"
+		}
+		t.Run(name, func(t *testing.T) {
+			h := newHost(t)
+			h.writeEngineAddress = true
+			path := filepath.Join(h.layout.State, hostplatform.EngineState)
+			if existing {
+				if err := h.install("version one", ""); err != nil {
+					t.Fatal(err)
+				}
+			}
+			h.fail["dies"] = true
+			if err := h.install("version two", ""); err != ErrStart {
+				t.Fatalf("installation error = %v", err)
+			}
+			if existing {
+				if got := h.read(path); got != "test engine\n" {
+					t.Fatalf("engine record = %q", got)
+				}
+			} else if lexists(path) {
+				t.Fatal("rolled back installation left an engine record")
+			}
+		})
 	}
 }

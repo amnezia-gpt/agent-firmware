@@ -5,9 +5,11 @@ import (
 	"errors"
 	"io"
 	"os"
+
+	"github.com/amnezia-gpt/agent-firmware/internal/host"
 )
 
-const apiRequiredFile = "device-api-required"
+const apiRequiredFile = host.DeviceAPIFloor
 
 func apiRequired(root *os.Root) (bool, error) {
 	f, err := openFile(root, apiRequiredFile, os.O_RDONLY)

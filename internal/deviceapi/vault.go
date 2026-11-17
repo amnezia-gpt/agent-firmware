@@ -9,10 +9,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
+
+	"github.com/amnezia-gpt/agent-firmware/internal/host"
+	"github.com/amnezia-gpt/agent-firmware/internal/privatefile"
 )
 
 var purposes = []string{"gateway-session", "registration-management", "mcp-oauth"}
@@ -48,7 +51,7 @@ func OpenVault(stateDir, installation string, key []byte) (*Vault, error) {
 	if len(key) != 32 || hex.EncodeToString(digest[:]) != m.KeyDigest {
 		return nil, ErrKeystore
 	}
-	r, err := privateRoot(stateDir + "/device-api")
+	r, err := privateRoot(filepath.Join(stateDir, host.DeviceAPIDir))
 	if err != nil {
 		return nil, err
 	}
@@ -57,7 +60,7 @@ func OpenVault(stateDir, installation string, key []byte) (*Vault, error) {
 		r.Close()
 		return nil, err
 	}
-	if syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) != nil {
+	if privatefile.TryLock(lock) != nil {
 		lock.Close()
 		r.Close()
 		return nil, ErrKeystore

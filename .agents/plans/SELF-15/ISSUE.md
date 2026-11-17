@@ -3,11 +3,12 @@
 ## Metadata
 
 - Type: Refactoring (no behavior change)
-- Status: Intake
+- Status: Done
 - Size / risk: Medium / medium (touches installation, state and API storage code paths)
 - Parent: [SELF-14](../SELF-14/ISSUE.md), step A of [DESIGN.md](../SELF-14/DESIGN.md)
 - Dependencies: none
-- Authorization: owner asked to record the issue (2026-11-17). Implementation is not authorized yet.
+- Authorization: owner authorized starting implementation on 2026-11-17.
+- Plan: [PLAN.md](PLAN.md)
 
 ## Problem
 
@@ -36,11 +37,31 @@ Any change of behavior, contract, file location or command. Support for another 
 
 ## Acceptance Criteria
 
-- [ ] Existing tests pass unchanged, apart from mechanical moves.
-- [ ] No absolute host path literal remains outside the layout.
-- [ ] `go vet` and the existing check commands of README pass.
-- [ ] A build for a non-Linux target compiles, with Linux-only code confined to files constrained to Linux.
+- [x] Existing tests pass unchanged, apart from mechanical moves.
+- [x] No absolute host path literal remains outside the layout in the Go firmware.
+- [x] `go vet` and the existing check commands of README pass.
+- [x] A build for a non-Linux target compiles, with Linux-only code confined to files constrained to Linux.
+
+## Evidence
+
+Validated the SELF-15 worktree based on `a495f02` with Go 1.27.4 on Darwin arm64. The full local Go suite, race
+suite, vet, vulnerability scan, format and shell syntax checks, and static builds passed. Both default systemd
+unit variants matched the baseline byte for byte.
+
+The full Go suite and bootstrap harness passed as root in a disposable Ubuntu 24.04 container on a native Linux
+amd64 host. The enrollment opt-in test and isolated inotify and Unix peer credential smoke checks also passed.
+The first Linux run exposed an existing CLI test fixture that supplied an empty code while asserting the missing
+state error. The test now supplies a syntactically valid code and exercises the same assertion. See
+[PLAN.md](PLAN.md) for commands and the validation boundary.
+
+## Known Limitations
+
+- `internal/privatefile` is exercised by the configuration, installer and Device API suites. It has no dedicated
+  package tests.
+- Configuration, workloads and Device API use `host.DefaultLayout()` directly for their fixed defaults. Fully
+  injecting the host layout across those package boundaries remains follow-up work.
+- Installation records the default Docker socket. The CLI has no engine-address option.
 
 ## Next Action
 
-Owner selects the issue; then a plan with one task per boundary.
+Use the platform boundaries in [SELF-16](../SELF-16/ISSUE.md).

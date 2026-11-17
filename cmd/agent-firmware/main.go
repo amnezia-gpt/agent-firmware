@@ -14,6 +14,7 @@ import (
 	"github.com/amnezia-gpt/agent-firmware/internal/configuration"
 	"github.com/amnezia-gpt/agent-firmware/internal/discovery"
 	"github.com/amnezia-gpt/agent-firmware/internal/dockerengine"
+	"github.com/amnezia-gpt/agent-firmware/internal/host"
 	"github.com/amnezia-gpt/agent-firmware/internal/service"
 	"github.com/amnezia-gpt/agent-firmware/internal/supervisor"
 	"github.com/amnezia-gpt/agent-firmware/internal/workload"
@@ -29,7 +30,11 @@ func run(args []string, input io.Reader, stdout, stderr io.Writer) int {
 		if os.Geteuid() != 0 {
 			return report(stderr, "root_required", 1)
 		}
-		engine, err := dockerengine.New()
+		address, err := (configuration.Store{Path: defaultStateDir}).EngineAddress()
+		if err != nil {
+			return report(stderr, err.Error(), 1)
+		}
+		engine, err := dockerengine.New(address)
 		if err != nil {
 			return report(stderr, err.Error(), 1)
 		}
@@ -84,7 +89,8 @@ var discover = func(ctx context.Context, issuer string) ([]byte, error) {
 	return discovery.Profile(ctx, discovery.NewClient(), issuer)
 }
 
-const defaultStateDir = "/var/lib/agent-firmware"
+var hostLayout = host.DefaultLayout()
+var defaultStateDir = hostLayout.State
 
 func runConfiguration(args []string, input io.Reader, stdout, stderr io.Writer) int {
 	command := args[0]
@@ -146,7 +152,7 @@ func runConfiguration(args []string, input io.Reader, stdout, stderr io.Writer) 
 		if command == "serve" {
 			manager := &apiManager{state: dir}
 			defer manager.close()
-			notifier := service.Notifier{Socket: os.Getenv("NOTIFY_SOCKET")}
+			notifier := (service.Systemd{Layout: hostLayout}).Notifier()
 			err := supervisor.Run(parent, func(ctx context.Context) (bool, error) {
 				result, err := executeManaged(ctx, store, manager)
 				manager.drain(stdout)
@@ -289,7 +295,11 @@ func executeManaged(parent context.Context, store configuration.Store, manager *
 				return err
 			}
 		}
-		engine, err := dockerengine.New()
+		address, err := session.EngineAddress()
+		if err != nil {
+			return err
+		}
+		engine, err := dockerengine.New(address)
 		if err != nil {
 			return err
 		}

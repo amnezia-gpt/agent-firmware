@@ -8,6 +8,7 @@ import (
 	"io"
 
 	"github.com/amnezia-gpt/agent-firmware/internal/configuration"
+	"github.com/amnezia-gpt/agent-firmware/internal/host"
 )
 
 const Manager = "agent-firmware"
@@ -94,4 +95,6 @@ func FromInput(input *configuration.Input) Stack {
 	return stack
 }
 
-func APIRuntimeDir(installation string) string { return "/run/agent-firmware/" + installation }
+func APIRuntimeDir(installation string) string {
+	return host.DefaultLayout().InstallationRuntime(installation)
+}

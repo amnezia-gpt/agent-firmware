@@ -11,8 +11,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"syscall"
 
+	"github.com/amnezia-gpt/agent-firmware/internal/host"
+	"github.com/amnezia-gpt/agent-firmware/internal/privatefile"
 	"github.com/amnezia-gpt/agent-firmware/internal/strictjson"
 	"github.com/amnezia-gpt/agent-firmware/internal/workloadrelease"
 )
@@ -33,12 +34,6 @@ type record struct {
 	Release       []byte `json:"workload_release"`
 }
 
-func safe(info os.FileInfo, mode os.FileMode) bool {
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	return ok && info.Mode().Perm() == mode && info.Mode()&(os.ModeSymlink|os.ModeSetuid|os.ModeSetgid|os.ModeSticky) == 0 &&
-		stat.Uid == uint32(os.Geteuid()) && stat.Gid == uint32(os.Getegid()) && (info.IsDir() || info.Mode().IsRegular() && stat.Nlink <= 1)
-}
-
 func (s Store) root(create bool) (*os.Root, error) {
 	if s.Path == "" {
 		return nil, ErrUnsafe
@@ -50,30 +45,15 @@ func (s Store) root(create bool) (*os.Root, error) {
 			return nil, ErrWrite
 		}
 	}
-	info, err := os.Lstat(s.Path)
+	root, err := privatefile.OpenDirectory(s.Path, privatefile.EffectiveOwner(), 0700)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, ErrMissing
 	}
+	if errors.Is(err, privatefile.ErrUnsafe) {
+		return nil, ErrUnsafe
+	}
 	if err != nil {
 		return nil, ErrRead
-	}
-	if !info.IsDir() || !safe(info, 0700) {
-		return nil, ErrUnsafe
-	}
-	root, err := os.OpenRoot(s.Path)
-	if err != nil {
-		return nil, ErrUnsafe
-	}
-	dir, err := root.Open(".")
-	if err != nil {
-		root.Close()
-		return nil, ErrUnsafe
-	}
-	defer dir.Close()
-	opened, err := dir.Stat()
-	if err != nil || !os.SameFile(info, opened) || !safe(opened, 0700) {
-		root.Close()
-		return nil, ErrUnsafe
 	}
 	if create {
 		// Persist the directory entry as well as records written inside it.
@@ -93,36 +73,26 @@ func (s Store) root(create bool) (*os.Root, error) {
 }
 
 func openFile(root *os.Root, name string, flags int) (*os.File, error) {
+	owner := privatefile.EffectiveOwner()
 	if info, err := root.Lstat(name); err == nil {
-		if !info.Mode().IsRegular() || !safe(info, 0600) {
+		if !owner.Regular(info, 0600, true) {
 			return nil, ErrUnsafe
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, ErrRead
 	}
-	f, err := root.OpenFile(name, flags|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0600)
+	file, err := privatefile.OpenRegular(root, name, flags, 0600, owner, flags&(os.O_WRONLY|os.O_RDWR) == 0)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, ErrMissing
 	}
 	if err != nil {
 		return nil, ErrUnsafe
 	}
-	info, err := f.Stat()
-	if err != nil || !info.Mode().IsRegular() || !safe(info, 0600) {
-		f.Close()
-		return nil, ErrUnsafe
-	}
-	// A reader may hold the complete old snapshot after rename unlinks it.
-	// Writable files, especially the process lock, must still have one link.
-	if flags&(os.O_WRONLY|os.O_RDWR) != 0 && info.Sys().(*syscall.Stat_t).Nlink != 1 {
-		f.Close()
-		return nil, ErrUnsafe
-	}
-	return f, nil
+	return file, nil
 }
 
 func load(root *os.Root) (*Input, error) {
-	f, err := openFile(root, "accepted.json", os.O_RDONLY)
+	f, err := openFile(root, host.AcceptedState, os.O_RDONLY)
 	if err != nil {
 		return nil, err
 	}
@@ -170,18 +140,11 @@ func (s Store) Save(input *Input) (bool, error) {
 		return false, err
 	}
 	defer root.Close()
-	lock, err := openFile(root, "operation.lock", os.O_RDWR|os.O_CREATE)
+	lock, err := operationLock(root)
 	if err != nil {
 		return false, err
 	}
 	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return false, ErrBusy
-		}
-		return false, ErrWrite
-	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 	if pending, err := (&Session{store: s, root: root}).Read(); err != nil {
 		return false, err
 	} else if len(pending) > 0 {
@@ -213,7 +176,7 @@ func (s Store) Save(input *Input) (bool, error) {
 	if err != nil {
 		return false, ErrWrite
 	}
-	if err := s.atomic(root, "accepted.json", data); err != nil {
+	if err := s.atomic(root, host.AcceptedState, data); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -225,48 +188,18 @@ func (s Store) atomic(root *os.Root, target string, data []byte) error {
 		return ErrWrite
 	}
 	name := "pending-" + hex.EncodeToString(nonce[:])
-	f, err := openFile(root, name, os.O_WRONLY|os.O_CREATE|os.O_EXCL)
-	if err != nil {
-		return ErrWrite
+	committed, err := privatefile.Replace(root, target, name, data, 0600, false, s.beforeRename, s.syncDirectory)
+	if err == nil {
+		return nil
 	}
-	defer root.Remove(name)
-	n, writeErr := f.Write(data)
-	if writeErr == nil && n != len(data) {
-		writeErr = io.ErrShortWrite
+	if committed {
+		return ErrUncertain
 	}
-	if writeErr == nil {
-		writeErr = f.Sync()
-	}
-	closeErr := f.Close()
-	if writeErr != nil || closeErr != nil {
-		return ErrWrite
-	}
-	if s.beforeRename != nil {
-		if err := s.beforeRename(); err != nil {
-			return ErrWrite
-		}
-	}
-	if err := root.Rename(name, target); err != nil {
-		return ErrWrite
-	}
-	if err := s.synchronize(root); err != nil {
-		return err
-	}
-	return nil
+	return ErrWrite
 }
 
 func (s Store) synchronize(root *os.Root) error {
-	dir, err := root.Open(".")
-	if err != nil {
-		return ErrUncertain
-	}
-	defer dir.Close()
-	if s.syncDirectory != nil {
-		err = s.syncDirectory(dir)
-	} else {
-		err = dir.Sync()
-	}
-	if err != nil {
+	if privatefile.SyncDirectory(root, ".", s.syncDirectory) != nil {
 		return ErrUncertain
 	}
 	return nil

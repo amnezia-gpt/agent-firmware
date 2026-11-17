@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -15,7 +14,9 @@ import (
 	"github.com/amnezia-gpt/agent-firmware/internal/configuration"
 	"github.com/amnezia-gpt/agent-firmware/internal/deviceapi"
 	"github.com/amnezia-gpt/agent-firmware/internal/dockerengine"
+	"github.com/amnezia-gpt/agent-firmware/internal/host"
 	"github.com/amnezia-gpt/agent-firmware/internal/installer"
+	"github.com/amnezia-gpt/agent-firmware/internal/service"
 )
 
 // hostFirmware gives the installer the firmware's own state operations. The
@@ -26,7 +27,11 @@ type hostFirmware struct {
 }
 
 func (f hostFirmware) Preflight(ctx context.Context) error {
-	engine, err := dockerengine.New()
+	address, err := f.store.EngineAddress()
+	if err != nil {
+		return err
+	}
+	engine, err := dockerengine.New(address)
 	if err != nil {
 		return err
 	}
@@ -42,8 +47,10 @@ func (f hostFirmware) Existing() error {
 }
 
 func (f hostFirmware) Configure() error {
-	_, err := f.store.Save(f.accepted)
-	return err
+	if _, err := f.store.Save(f.accepted); err != nil {
+		return err
+	}
+	return f.store.PersistEngineAddress()
 }
 
 func (f hostFirmware) PrepareAPI(ctx context.Context) (bool, error) {
@@ -62,13 +69,10 @@ func (f hostFirmware) ClearCode() { _, _ = enrollmentCode(f.store, nil, false) }
 // The two host boundaries are replaced in tests.
 var (
 	hostReady = func() string {
-		if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-			return "unsupported_host"
+		if reason := host.InstallCheck(); reason != "" {
+			return reason
 		}
-		if os.Geteuid() != 0 || os.Getegid() != 0 {
-			return "root_required"
-		}
-		if info, err := os.Stat("/run/systemd/system"); err != nil || !info.IsDir() {
+		if !(service.Systemd{Layout: hostLayout}).Available() {
 			return "systemd_unavailable"
 		}
 		return ""
@@ -80,8 +84,8 @@ var (
 		}
 		store := configuration.Store{Path: defaultStateDir}
 		return installer.Install(ctx, installer.Request{
-			Layout: installer.HostLayout(), Binary: binary, Code: code,
-			Systemd: installer.Systemctl{}, Firmware: hostFirmware{store, accepted}, Progress: progress,
+			Layout: hostLayout, Binary: binary, Code: code,
+			Services: service.Systemd{Layout: hostLayout}, Firmware: hostFirmware{store, accepted}, Progress: progress,
 		})
 	}
 )

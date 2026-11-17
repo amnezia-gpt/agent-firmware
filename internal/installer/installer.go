@@ -1,5 +1,5 @@
 // Package installer places the running firmware binary on the host as a
-// systemd service inside one recoverable transaction: a failed or interrupted
+// host service inside one recoverable transaction: a failed or interrupted
 // installation returns the previous version, unit and accepted configuration.
 // Host preparation (platform, Docker, download) belongs to the bootstrap
 // script; everything from here on is firmware responsibility.
@@ -14,8 +14,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
+
+	hostplatform "github.com/amnezia-gpt/agent-firmware/internal/host"
+	"github.com/amnezia-gpt/agent-firmware/internal/privatefile"
 )
 
 // Error is a bounded diagnostic; it never contains input, paths or underlying errors.
@@ -45,48 +47,23 @@ const (
 
 const (
 	managedMarker = "agent-firmware-installer-v1"
-	unitMarker    = "# Managed by agent-firmware installer v1"
-	credential    = "LoadCredentialEncrypted=device-api-key:/var/lib/agent-firmware/device-api/key.cred"
 	// The transaction layout is versioned so a later firmware never guesses at an older one.
 	transactionFormat = "1"
 	maxBinary         = 64 << 20
-	serviceName       = "agent-firmware.service"
 )
 
-// Layout names every host path the installer owns. Tests point it at a private tree.
-type Layout struct {
-	Base    string   // versions, current pointer, transaction
-	Wrapper string   // stable command path, a link into Base/current
-	Unit    string   // systemd unit file
-	State   string   // firmware state directory (owned by the firmware, read here for rollback)
-	Lock    string   // directory of the installer lock
-	DropIns []string // unit override directories that must not exist
-	Parents []string // system directories that must be owner-only writable
-	UID     uint32
-	GID     uint32
-}
-
-// HostLayout is the layout of a real installation.
-func HostLayout() Layout {
-	return Layout{
-		Base:    "/usr/local/lib/agent-firmware",
-		Wrapper: "/usr/local/bin/agent-firmware",
-		Unit:    "/etc/systemd/system/" + serviceName,
-		State:   "/var/lib/agent-firmware",
-		Lock:    "/run/agent-firmware-install",
-		DropIns: []string{"/etc/systemd/system/" + serviceName + ".d", "/run/systemd/system/" + serviceName + ".d"},
-		Parents: []string{"/usr", "/usr/local", "/usr/local/lib", "/usr/local/bin", "/etc", "/etc/systemd", "/etc/systemd/system", "/var", "/var/lib", "/run"},
-	}
-}
-
-// Systemd is the service manager boundary.
-type Systemd interface {
-	// Do runs stop, start, enable, disable or daemon-reload for the firmware service.
-	Do(ctx context.Context, verb string) error
-	Active(ctx context.Context) bool
-	Enabled(ctx context.Context) bool
-	// Fragment is the path of the unit file systemd has loaded, empty when none.
-	Fragment(ctx context.Context) (string, error)
+// ServiceManager supplies the platform's service definition and operations.
+type ServiceManager interface {
+	Definition(deviceAPI bool) []byte
+	Owns(definition []byte) bool
+	SupportsDeviceAPI(definition []byte) bool
+	Stop(context.Context) error
+	Start(context.Context) error
+	Reload(context.Context) error
+	SetEnabled(context.Context, bool) error
+	Active(context.Context) bool
+	Enabled(context.Context) bool
+	Fragment(context.Context) (string, error)
 }
 
 // Firmware is what the installer asks of the firmware's own state handling.
@@ -103,10 +80,10 @@ type Firmware interface {
 
 // Request is one installation of the binary at Binary. Code may be empty.
 type Request struct {
-	Layout   Layout
+	Layout   hostplatform.Layout
 	Binary   string
 	Code     string
-	Systemd  Systemd
+	Services ServiceManager
 	Firmware Firmware
 	// Progress, when set, receives short human-readable lines about the current step.
 	Progress func(message string)
@@ -236,7 +213,7 @@ func Install(ctx context.Context, request Request) (err error) {
 	}
 	r.say("Installing the firmware service")
 	if exists(filepath.Join(r.transaction, "was-active")) {
-		if err = step(ErrStop, func() error { return r.Systemd.Do(ctx, "stop") }); err != nil {
+		if err = step(ErrStop, func() error { return r.Services.Stop(ctx) }); err != nil {
 			return err
 		}
 	}
@@ -259,17 +236,17 @@ func Install(ctx context.Context, request Request) (err error) {
 				return ErrWrite
 			}
 		}
-		if replace(l.Unit, []byte(Unit(api)), 0o644) != nil {
+		if replace(l.Unit, r.Services.Definition(api), 0o644) != nil {
 			return ErrWrite
 		}
 		return syncPath(l.Base)
 	}); err != nil {
 		return err
 	}
-	if err = step(ErrReload, func() error { return r.Systemd.Do(ctx, "daemon-reload") }); err != nil {
+	if err = step(ErrReload, func() error { return r.Services.Reload(ctx) }); err != nil {
 		return err
 	}
-	if err = step(ErrEnable, func() error { return r.Systemd.Do(ctx, "enable") }); err != nil {
+	if err = step(ErrEnable, func() error { return r.Services.SetEnabled(ctx, true) }); err != nil {
 		return err
 	}
 	if r.Code != "" {
@@ -283,7 +260,7 @@ func Install(ctx context.Context, request Request) (err error) {
 	stopWaiting := r.waiting("Still starting, please wait")
 	defer stopWaiting()
 	if err = step(ErrStart, func() error {
-		if r.Systemd.Do(ctx, "start") != nil || !r.Systemd.Active(ctx) {
+		if r.Services.Start(ctx) != nil || !r.Services.Active(ctx) {
 			return ErrStart
 		}
 		return nil
@@ -297,51 +274,6 @@ func Install(ctx context.Context, request Request) (err error) {
 	return nil
 }
 
-// Unit is the systemd unit of the service. The device API credential is loaded
-// only for a release that uses the local device API.
-func Unit(api bool) string {
-	load := ""
-	if api {
-		load = credential + "\n"
-	}
-	return unitMarker + `
-[Unit]
-Description=Agent firmware host supervisor
-After=network-online.target docker.service
-Wants=network-online.target
-Requires=docker.service
-StartLimitIntervalSec=60s
-StartLimitBurst=3
-
-[Service]
-Type=notify
-NotifyAccess=main
-User=root
-Group=root
-` + load + `ExecStart=/usr/local/bin/agent-firmware serve
-UMask=0077
-Restart=on-failure
-RestartSec=5s
-TimeoutStartSec=20min
-TimeoutStopSec=150s
-KillMode=control-group
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectHome=true
-ProtectSystem=strict
-RuntimeDirectory=agent-firmware
-RuntimeDirectoryMode=0700
-RuntimeDirectoryPreserve=yes
-ReadWritePaths=/var/lib/agent-firmware /run/agent-firmware
-RestrictAddressFamilies=AF_UNIX
-LockPersonality=true
-LimitNOFILE=4096
-
-[Install]
-WantedBy=multi-user.target
-`
-}
-
 func (r *run) lock() (func(), error) {
 	l := r.Layout
 	if !lexists(l.Lock) {
@@ -353,11 +285,11 @@ func (r *run) lock() (func(), error) {
 	if !r.safeDir(l.Lock, 0o700) || lexists(file) && !r.safeFile(file, 0o600) {
 		return nil, ErrConflict
 	}
-	f, err := os.OpenFile(file, os.O_WRONLY|os.O_CREATE|syscall.O_NOFOLLOW, 0o600)
+	f, err := privatefile.OpenRegular(nil, file, os.O_WRONLY|os.O_CREATE, 0o600, r.owner(), false)
 	if err != nil {
 		return nil, ErrConflict
 	}
-	if syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) != nil {
+	if privatefile.TryLock(f) != nil {
 		f.Close()
 		return nil, ErrBusy
 	}
@@ -390,14 +322,14 @@ func (r *run) conflicts(ctx context.Context) error {
 			return ErrConflict
 		}
 	}
-	fragment, err := r.Systemd.Fragment(ctx)
+	fragment, err := r.Services.Fragment(ctx)
 	if err != nil {
 		return ErrSystemd
 	}
 	if fragment != "" && fragment != l.Unit {
 		return ErrConflict
 	}
-	if lexists(l.Unit) && (!r.safeFile(l.Unit, 0o644) || !hasLine(l.Unit, unitMarker)) {
+	if lexists(l.Unit) && (!r.safeFile(l.Unit, 0o644) || !checkDefinition(l.Unit, r.Services.Owns)) {
 		return ErrConflict
 	}
 	if lexists(l.Wrapper) && !r.ownWrapper() {
@@ -463,7 +395,7 @@ func (r *run) prepare(ctx context.Context) error {
 		data, err := os.ReadFile(l.Unit)
 		ok = ok && err == nil && record("unit", data) && record("had-unit", nil)
 	}
-	accepted := filepath.Join(l.State, "accepted.json")
+	accepted := filepath.Join(l.State, hostplatform.AcceptedState)
 	if isFile(accepted) {
 		if !r.safeFile(accepted, 0o600) {
 			_ = os.RemoveAll(t)
@@ -472,10 +404,15 @@ func (r *run) prepare(ctx context.Context) error {
 		data, err := os.ReadFile(accepted)
 		ok = ok && err == nil && record("config", data) && record("had-config", nil)
 	}
-	if r.Systemd.Active(ctx) {
+	// Existing engine records are immutable. Only a newly published record
+	// needs to be removed during rollback.
+	if !lexists(filepath.Join(l.State, hostplatform.EngineState)) {
+		ok = ok && record("engine-absent", nil)
+	}
+	if r.Services.Active(ctx) {
 		ok = ok && record("was-active", nil)
 	}
-	if r.Systemd.Enabled(ctx) {
+	if r.Services.Enabled(ctx) {
 		ok = ok && record("was-enabled", nil)
 	}
 	if !ok || !record("prepared", nil) || syncPath(t) != nil {
@@ -504,14 +441,14 @@ func (r *run) recover() error {
 	}
 	ctx := context.Background()
 	// Once the device API may have issued ciphertext, never restart a pre-API reader.
-	floor := filepath.Join(l.State, "device-api-required")
+	floor := filepath.Join(l.State, hostplatform.DeviceAPIFloor)
 	if lexists(floor) {
-		if !r.safeFile(floor, 0o600) || !hasLine(floor, "required") || !has("had-unit") || !hasLine(filepath.Join(t, "unit"), credential) {
+		if !r.safeFile(floor, 0o600) || !hasLine(floor, "required") || !has("had-unit") || !checkDefinition(filepath.Join(t, "unit"), r.Services.SupportsDeviceAPI) {
 			return ErrRecovery
 		}
 	}
 	if isFile(l.Unit) {
-		if !r.safeFile(l.Unit, 0o644) || !hasLine(l.Unit, unitMarker) || r.Systemd.Do(ctx, "stop") != nil {
+		if !r.safeFile(l.Unit, 0o644) || !checkDefinition(l.Unit, r.Services.Owns) || r.Services.Stop(ctx) != nil {
 			return ErrRecovery
 		}
 	}
@@ -538,13 +475,13 @@ func (r *run) recover() error {
 			return ErrRecovery
 		}
 	} else if isFile(l.Unit) {
-		if !hasLine(l.Unit, unitMarker) || os.Remove(l.Unit) != nil {
+		if !checkDefinition(l.Unit, r.Services.Owns) || os.Remove(l.Unit) != nil {
 			return ErrRecovery
 		}
 	}
-	accepted := filepath.Join(l.State, "accepted.json")
+	accepted := filepath.Join(l.State, hostplatform.AcceptedState)
 	switch {
-	case isFile(filepath.Join(l.State, "operation.json")):
+	case isFile(filepath.Join(l.State, hostplatform.OperationJournal)):
 		if !has("had-config") || !sameContent(filepath.Join(t, "config"), accepted) {
 			return ErrRecovery
 		}
@@ -558,23 +495,37 @@ func (r *run) recover() error {
 			return ErrRecovery
 		}
 	}
-	if r.Systemd.Do(ctx, "daemon-reload") != nil {
+	if has("engine-absent") && r.removeNewEngineState() != nil {
 		return ErrRecovery
 	}
-	verb := "disable"
-	if has("was-enabled") {
-		verb = "enable"
-	}
-	if r.Systemd.Do(ctx, verb) != nil {
+	if r.Services.Reload(ctx) != nil {
 		return ErrRecovery
 	}
-	if has("was-active") && r.Systemd.Do(ctx, "start") != nil {
+	if r.Services.SetEnabled(ctx, has("was-enabled")) != nil {
+		return ErrRecovery
+	}
+	if has("was-active") && r.Services.Start(ctx) != nil {
 		return ErrRecovery
 	}
 	if syncPath(l.Base) != nil {
 		return ErrRecovery
 	}
 	return os.RemoveAll(t)
+}
+
+func (r *run) removeNewEngineState() error {
+	state := r.Layout.State
+	if !lexists(state) {
+		return nil
+	}
+	if !r.safeDir(state, 0700) {
+		return ErrRecovery
+	}
+	path := filepath.Join(state, hostplatform.EngineState)
+	if lexists(path) && (!r.safeFile(path, 0600) || os.Remove(path) != nil) {
+		return ErrRecovery
+	}
+	return syncPath(state)
 }
 
 // pointer atomically points Base/current at a version directory.
@@ -608,28 +559,18 @@ func (r *run) ownWrapper() bool {
 	return err == nil && target == filepath.Join(r.Layout.Base, "current", "agent-firmware")
 }
 
-func (r *run) owned(info os.FileInfo, mode os.FileMode) (*syscall.Stat_t, bool) {
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	special := os.ModeSetuid | os.ModeSetgid | os.ModeSticky
-	return stat, ok && stat.Uid == r.Layout.UID && stat.Gid == r.Layout.GID && info.Mode().Perm() == mode && info.Mode()&special == 0
+func (r *run) owner() privatefile.Owner {
+	return privatefile.Owner{UID: r.Layout.UID, GID: r.Layout.GID}
 }
 
 func (r *run) safeDir(path string, mode os.FileMode) bool {
 	info, err := os.Lstat(path)
-	if err != nil || !info.IsDir() {
-		return false
-	}
-	_, ok := r.owned(info, mode)
-	return ok
+	return err == nil && r.owner().Directory(info, mode)
 }
 
 func (r *run) safeFile(path string, mode os.FileMode) bool {
 	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() {
-		return false
-	}
-	stat, ok := r.owned(info, mode)
-	return ok && stat.Nlink == 1
+	return err == nil && r.owner().Regular(info, mode, false)
 }
 
 func lexists(path string) bool { _, err := os.Lstat(path); return err == nil }
@@ -641,6 +582,11 @@ func isLink(path string) bool {
 func isFile(path string) bool {
 	info, err := os.Lstat(path)
 	return err == nil && info.Mode().IsRegular()
+}
+
+func checkDefinition(path string, check func([]byte) bool) bool {
+	data, err := os.ReadFile(path)
+	return err == nil && check(data)
 }
 
 func hasLine(path, line string) bool {
@@ -678,26 +624,10 @@ func digestOf(path string) string {
 	return hex.EncodeToString(hash.Sum(nil))
 }
 
-// write creates a new file with exact permissions and flushes it.
 func write(path string, data []byte, mode os.FileMode) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, mode)
-	if err != nil {
-		return err
-	}
-	_, err = f.Write(data)
-	if err == nil {
-		err = f.Chmod(mode)
-	}
-	if err == nil {
-		err = f.Sync()
-	}
-	if closeErr := f.Close(); err == nil {
-		err = closeErr
-	}
-	return err
+	return privatefile.WriteNew(nil, path, data, mode, true)
 }
 
-// replace atomically substitutes a file through an owned temporary name.
 func replace(path string, data []byte, mode os.FileMode) error {
 	staged := path + ".install-new"
 	if lexists(staged) {
@@ -705,17 +635,8 @@ func replace(path string, data []byte, mode os.FileMode) error {
 			return err
 		}
 	}
-	if err := write(staged, data, mode); err != nil {
-		return err
-	}
-	return os.Rename(staged, path)
+	_, err := privatefile.Replace(nil, path, staged, data, mode, true, nil, nil)
+	return err
 }
 
-func syncPath(path string) error {
-	f, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	return f.Sync()
-}
+func syncPath(path string) error { return privatefile.SyncDirectory(nil, path, nil) }

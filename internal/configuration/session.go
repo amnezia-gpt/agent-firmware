@@ -6,7 +6,9 @@ import (
 	"errors"
 	"io"
 	"os"
-	"syscall"
+
+	"github.com/amnezia-gpt/agent-firmware/internal/host"
+	"github.com/amnezia-gpt/agent-firmware/internal/privatefile"
 )
 
 // Session retains the configuration writer lock for one lifecycle operation.
@@ -22,23 +24,32 @@ func (s Store) Exclusive(fn func(*Session) error) error {
 		return err
 	}
 	defer root.Close()
-	lock, err := openFile(root, "operation.lock", os.O_RDWR|os.O_CREATE)
+	lock, err := operationLock(root)
 	if err != nil {
 		return err
 	}
 	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return ErrBusy
-		}
-		return ErrWrite
-	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 	return fn(&Session{s, root})
 }
+
+func operationLock(root *os.Root) (*os.File, error) {
+	lock, err := openFile(root, host.OperationLock, os.O_RDWR|os.O_CREATE)
+	if err != nil {
+		return nil, err
+	}
+	if err := privatefile.TryLock(lock); err != nil {
+		lock.Close()
+		if errors.Is(err, privatefile.ErrBusy) {
+			return nil, ErrBusy
+		}
+		return nil, ErrWrite
+	}
+	return lock, nil
+}
+
 func (s *Session) Load() (*Input, error) { return load(s.root) }
 func (s *Session) Read() ([]byte, error) {
-	f, err := openFile(s.root, "operation.json", os.O_RDONLY)
+	f, err := openFile(s.root, host.OperationJournal, os.O_RDONLY)
 	if errors.Is(err, ErrMissing) {
 		return nil, nil
 	}
@@ -60,9 +71,9 @@ func (s *Session) Write(data []byte) error {
 		return ErrInvalid
 	}
 	if len(data) > 0 {
-		return s.store.atomic(s.root, "operation.json", data)
+		return s.store.atomic(s.root, host.OperationJournal, data)
 	}
-	f, err := openFile(s.root, "operation.json", os.O_RDONLY)
+	f, err := openFile(s.root, host.OperationJournal, os.O_RDONLY)
 	if errors.Is(err, ErrMissing) {
 		return nil
 	}
@@ -70,7 +81,7 @@ func (s *Session) Write(data []byte) error {
 		return err
 	}
 	f.Close()
-	if s.root.Remove("operation.json") != nil {
+	if s.root.Remove(host.OperationJournal) != nil {
 		return ErrWrite
 	}
 	return s.store.synchronize(s.root)

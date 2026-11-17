@@ -5,11 +5,13 @@ package deviceapi
 import (
 	"encoding/binary"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/amnezia-gpt/agent-firmware/internal/host"
 	"golang.org/x/sys/unix"
 )
 
@@ -31,7 +33,7 @@ func startWatch(path string, publish func(bool, bool)) (func(), os.FileInfo, err
 		return nil, nil, ErrWatch
 	}
 	mask := uint32(unix.IN_MODIFY | unix.IN_CLOSE_WRITE | unix.IN_ATTRIB | unix.IN_MOVED_TO | unix.IN_MOVED_FROM | unix.IN_CREATE | unix.IN_DELETE | unix.IN_DELETE_SELF | unix.IN_MOVE_SELF | unix.IN_UNMOUNT | unix.IN_ONLYDIR)
-	if _, err := unix.InotifyAddWatch(in, "/proc/self/fd/"+strconv.Itoa(fd), mask); err != nil {
+	if _, err := unix.InotifyAddWatch(in, filepath.Join(host.DefaultLayout().ProcFD, strconv.Itoa(fd)), mask); err != nil {
 		unix.Close(in)
 		dir.Close()
 		return nil, nil, ErrWatch

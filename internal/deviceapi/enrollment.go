@@ -5,8 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"syscall"
 	"time"
+
+	"github.com/amnezia-gpt/agent-firmware/internal/host"
+	"github.com/amnezia-gpt/agent-firmware/internal/privatefile"
 )
 
 // The one-time enrollment code is an opaque bearer secret of the control plane.
@@ -45,7 +47,7 @@ func (s *CodeStore) Put(code string) error {
 	if err := os.Remove(staged); err != nil && !os.IsNotExist(err) {
 		return ErrKeystore
 	}
-	f, err := os.OpenFile(staged, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0600)
+	f, err := privatefile.Open(nil, staged, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return ErrKeystore
 	}
@@ -61,7 +63,7 @@ func (s *CodeStore) Put(code string) error {
 
 // Get returns the held code. An expired, foreign or malformed file is removed.
 func (s *CodeStore) Get() (string, bool) {
-	f, err := os.OpenFile(s.path(), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	f, err := privatefile.Open(nil, s.path(), os.O_RDONLY, 0)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			os.Remove(s.path())
@@ -70,9 +72,13 @@ func (s *CodeStore) Get() (string, bool) {
 	}
 	defer f.Close()
 	info, err := f.Stat()
-	st, ok := info.Sys().(*syscall.Stat_t)
+	if err != nil {
+		os.Remove(s.path())
+		return "", false
+	}
+	owner, links, ok := privatefile.Ownership(info)
 	age := s.now().Sub(info.ModTime())
-	if err != nil || !ok || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 || st.Uid != uint32(os.Geteuid()) || st.Nlink != 1 || age < -time.Minute || age >= enrollmentTTL {
+	if !ok || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 || owner.UID != uint32(os.Geteuid()) || links != 1 || age < -time.Minute || age >= enrollmentTTL {
 		os.Remove(s.path())
 		return "", false
 	}
@@ -99,7 +105,7 @@ func EnrollmentCodes(installation string, create bool) (*CodeStore, error) {
 	if os.Geteuid() != 0 || !installationPattern.MatchString(installation) {
 		return nil, ErrKeystore
 	}
-	base := "/run/agent-firmware/" + installation
+	base := host.DefaultLayout().InstallationRuntime(installation)
 	if create && (ensureDir(filepath.Dir(base), 0700, 0, 0) != nil || ensureDir(base, 0700, 0, 0) != nil) {
 		return nil, ErrKeystore
 	}

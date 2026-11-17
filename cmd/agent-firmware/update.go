@@ -70,7 +70,7 @@ func runUpdate(args []string, stdout, stderr io.Writer) int {
 }
 
 // updateDirectory holds the downloaded script; it is read by sh, so a noexec mount does not matter.
-var updateDirectory = "/run"
+var updateDirectory = hostLayout.UpdateDirectory
 
 func updateFrom(issuer string, stdout, stderr io.Writer) int {
 	ctx := context.Background()

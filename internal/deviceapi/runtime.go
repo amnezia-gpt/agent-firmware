@@ -9,8 +9,10 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"syscall"
 	"time"
+
+	"github.com/amnezia-gpt/agent-firmware/internal/host"
+	"github.com/amnezia-gpt/agent-firmware/internal/privatefile"
 )
 
 // Runtime owns one installation's socket. Directories stay stable across restarts
@@ -31,7 +33,7 @@ func Start(stateDir, installation string, key []byte) (*Runtime, error) {
 	if os.Geteuid() != 0 || !installationPattern.MatchString(installation) {
 		return nil, ErrKeystore
 	}
-	return startAt(stateDir, "/run/agent-firmware/"+installation, installation, key)
+	return startAt(stateDir, host.DefaultLayout().InstallationRuntime(installation), installation, key)
 }
 func ensureDir(path string, mode os.FileMode, uid, gid int) error {
 	if err := os.Mkdir(path, mode); err == nil {
@@ -42,11 +44,8 @@ func ensureDir(path string, mode os.FileMode, uid, gid int) error {
 		return ErrKeystore
 	}
 	i, err := os.Lstat(path)
-	if err != nil || !i.IsDir() || i.Mode().Perm() != mode || i.Mode()&(os.ModeSymlink|os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
-		return ErrKeystore
-	}
-	st, ok := i.Sys().(*syscall.Stat_t)
-	if !ok || st.Uid != uint32(uid) || st.Gid != uint32(gid) {
+	owner := privatefile.Owner{UID: uint32(uid), GID: uint32(gid)}
+	if err != nil || !owner.Directory(i, mode) {
 		return ErrKeystore
 	}
 	return nil
@@ -67,7 +66,7 @@ func startAt(stateDir, base, installation string, key []byte) (*Runtime, error) 
 	}
 	tokenPath := base + "/auth/token"
 	if _, err := os.Lstat(tokenPath); os.IsNotExist(err) {
-		f, err := os.OpenFile(tokenPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0400)
+		f, err := privatefile.Open(nil, tokenPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0400)
 		if err != nil {
 			return nil, ErrKeystore
 		}
@@ -82,8 +81,8 @@ func startAt(stateDir, base, installation string, key []byte) (*Runtime, error) 
 	if err != nil || !i.Mode().IsRegular() || i.Mode().Perm() != 0400 {
 		return nil, ErrKeystore
 	}
-	st, ok := i.Sys().(*syscall.Stat_t)
-	if !ok || st.Uid != GatewayUID || st.Gid != GatewayUID || st.Nlink != 1 {
+	owner, links, ok := privatefile.Ownership(i)
+	if !ok || owner.UID != GatewayUID || owner.GID != GatewayUID || links != 1 {
 		return nil, ErrKeystore
 	}
 	token, err := os.ReadFile(tokenPath)
@@ -92,8 +91,8 @@ func startAt(stateDir, base, installation string, key []byte) (*Runtime, error) 
 	}
 	path := base + "/api/socket"
 	if old, err := os.Lstat(path); err == nil {
-		st, ok := old.Sys().(*syscall.Stat_t)
-		if old.Mode()&os.ModeSocket == 0 || !ok || st.Uid != 0 || st.Gid != GatewayUID || old.Mode().Perm() != 0660 {
+		owner, _, ok := privatefile.Ownership(old)
+		if old.Mode()&os.ModeSocket == 0 || !ok || owner.UID != 0 || owner.GID != GatewayUID || old.Mode().Perm() != 0660 {
 			return nil, ErrKeystore
 		}
 		if os.Remove(path) != nil {
@@ -168,7 +167,7 @@ func LoadCredential(directory string) ([]byte, error) {
 		return nil, ErrKeystore
 	}
 	defer r.Close()
-	f, err := r.OpenFile("device-api-key", os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	f, err := privatefile.Open(r, "device-api-key", os.O_RDONLY, 0)
 	if err != nil {
 		return nil, ErrKeystore
 	}
@@ -177,8 +176,8 @@ func LoadCredential(directory string) ([]byte, error) {
 	if err != nil || !i.Mode().IsRegular() || i.Mode().Perm()&0077 != 0 {
 		return nil, ErrKeystore
 	}
-	st, ok := i.Sys().(*syscall.Stat_t)
-	if !ok || st.Uid != 0 || st.Nlink != 1 {
+	owner, links, ok := privatefile.Ownership(i)
+	if !ok || owner.UID != 0 || links != 1 {
 		return nil, ErrKeystore
 	}
 	b, err := io.ReadAll(io.LimitReader(f, 33))

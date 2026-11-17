@@ -4,6 +4,7 @@ package service
 import (
 	"context"
 	"net"
+	"os"
 	"strings"
 	"time"
 )
@@ -17,6 +18,10 @@ const ErrNotify Error = "service_notify_failed"
 type Notifier struct {
 	Socket string
 	sent   bool
+}
+
+func (Systemd) Notifier() Notifier {
+	return Notifier{Socket: os.Getenv("NOTIFY_SOCKET")}
 }
 
 // Ready sends one fixed message. Foreground operation needs no notification.

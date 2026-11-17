@@ -35,6 +35,15 @@ issues the identity statement that binds them.
 
 The transport and routes ([SELF-19](../SELF-19/ISSUE.md)); key rotation; hardware-backed keys.
 
+## Before Implementation
+
+The field-level contract is drafted in
+[device-api-v3.openapi.json](../SELF-14/device-api-v3.openapi.json) with public test vectors in
+[device-api-v3.vectors.json](../SELF-14/device-api-v3.vectors.json): field names, types and encodings for public
+keys, the identity statement, ES256 signatures and ECDH inputs and outputs, the errors and limits that carry over,
+and rejection cases for the statement. The firmware owns this contract and consumers copy it. It is a proposal
+until the owner accepts it; identity work implements it and SELF-19 connects the routes to the transport.
+
 ## Acceptance Criteria
 
 - [ ] Reinstalling or updating keeps the IDevID; leaving a domain keeps the IDevID and removes the operational
@@ -47,4 +56,4 @@ The transport and routes ([SELF-19](../SELF-19/ISSUE.md)); key rotation; hardwar
 
 ## Next Action
 
-Owner selects the issue after SELF-17.
+Close the shared field-level schema before implementing this issue, then continue after SELF-16 and SELF-17.

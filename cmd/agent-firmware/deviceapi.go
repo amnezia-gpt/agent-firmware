@@ -50,7 +50,11 @@ func prepareAPI(ctx context.Context, store configuration.Store, explicit bool) (
 				return errAPIInit
 			}
 		} else {
-			engine, err := dockerengine.New()
+			address, err := s.EngineAddress()
+			if err != nil {
+				return err
+			}
+			engine, err := dockerengine.New(address)
 			if err != nil {
 				return err
 			}

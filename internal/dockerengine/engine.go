@@ -60,7 +60,7 @@ func (t boundedTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	response.Body = &limitedBody{response.Body, limit}
 	return response, nil
 }
-func New() (*Engine, error) { return newClient("/var/run/docker.sock", 15*time.Second) }
+func New(socket string) (*Engine, error) { return newClient(socket, 15*time.Second) }
 func newClient(socket string, timeout time.Duration) (*Engine, error) {
 	dialer := &net.Dialer{Timeout: 3 * time.Second, KeepAlive: 30 * time.Second}
 	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {

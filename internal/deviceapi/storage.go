@@ -15,9 +15,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"syscall"
 	"time"
 
+	"github.com/amnezia-gpt/agent-firmware/internal/host"
+	"github.com/amnezia-gpt/agent-firmware/internal/privatefile"
 	"github.com/amnezia-gpt/agent-firmware/internal/strictjson"
 )
 
@@ -52,44 +53,21 @@ type metadata struct {
 }
 
 func privateRoot(path string) (*os.Root, error) {
-	path = filepath.Clean(path)
-	i, err := os.Lstat(path)
-	if err != nil || !i.IsDir() || !privateInfo(i, 0700) {
-		return nil, ErrKeystore
-	}
-	r, err := os.OpenRoot(path)
+	root, err := privatefile.OpenDirectory(path, privatefile.EffectiveOwner(), 0700)
 	if err != nil {
 		return nil, ErrKeystore
 	}
-	f, err := r.Open(".")
-	if err != nil {
-		r.Close()
-		return nil, ErrKeystore
-	}
-	opened, err := f.Stat()
-	f.Close()
-	if err != nil || !os.SameFile(i, opened) {
-		r.Close()
-		return nil, ErrKeystore
-	}
-	return r, nil
+	return root, nil
 }
-func privateInfo(i os.FileInfo, mode os.FileMode) bool {
-	s, ok := i.Sys().(*syscall.Stat_t)
-	return ok && i.Mode().Perm() == mode && i.Mode()&(os.ModeSymlink|os.ModeSetuid|os.ModeSetgid|os.ModeSticky) == 0 && s.Uid == uint32(os.Geteuid()) && s.Gid == uint32(os.Getegid()) && (i.IsDir() || i.Mode().IsRegular() && s.Nlink == 1)
-}
-func privateFile(r *os.Root, name string, flags int) (*os.File, error) {
-	f, err := r.OpenFile(name, flags|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0600)
+
+func privateFile(root *os.Root, name string, flags int) (*os.File, error) {
+	file, err := privatefile.OpenRegular(root, name, flags, 0600, privatefile.EffectiveOwner(), false)
 	if err != nil {
 		return nil, ErrKeystore
 	}
-	i, err := f.Stat()
-	if err != nil || !i.Mode().IsRegular() || !privateInfo(i, 0600) {
-		f.Close()
-		return nil, ErrKeystore
-	}
-	return f, nil
+	return file, nil
 }
+
 func readPrivate(r *os.Root, name string, limit int) ([]byte, error) {
 	f, err := privateFile(r, name, os.O_RDONLY)
 	if err != nil {
@@ -103,12 +81,7 @@ func readPrivate(r *os.Root, name string, limit int) ([]byte, error) {
 	return b, nil
 }
 func syncRoot(r *os.Root) error {
-	f, err := r.Open(".")
-	if err != nil {
-		return ErrKeystore
-	}
-	defer f.Close()
-	if f.Sync() != nil {
+	if privatefile.SyncDirectory(r, ".", nil) != nil {
 		return ErrKeystore
 	}
 	return nil
@@ -121,35 +94,23 @@ func randomBytes(n int) ([]byte, error) {
 	return b, nil
 }
 func writeNew(r *os.Root, name string, data []byte) error {
-	f, err := privateFile(r, name, os.O_WRONLY|os.O_CREATE|os.O_EXCL)
-	if err != nil {
-		return err
-	}
-	_, err = f.Write(data)
-	if err == nil {
-		err = f.Sync()
-	}
-	closed := f.Close()
-	if err != nil || closed != nil {
+	if privatefile.WriteNew(r, name, data, 0600, false) != nil {
 		return ErrKeystore
 	}
 	return nil
 }
+
 func atomicMetadata(r *os.Root, m metadata) error {
-	b, _ := json.Marshal(m)
+	data, _ := json.Marshal(m)
 	nonce, err := randomBytes(12)
 	if err != nil {
 		return err
 	}
-	name := ".state-" + hex.EncodeToString(nonce)
-	defer r.Remove(name)
-	if err := writeNew(r, name, b); err != nil {
-		return err
-	}
-	if r.Rename(name, "state.json") != nil {
+	staged := ".state-" + hex.EncodeToString(nonce)
+	if _, err := privatefile.Replace(r, "state.json", staged, data, 0600, false, nil, nil); err != nil {
 		return ErrKeystore
 	}
-	return syncRoot(r)
+	return nil
 }
 func keyIDBytes(id string) ([]byte, error) {
 	if len(id) != 25 || id[:3] != "k1_" {
@@ -190,7 +151,7 @@ func loadMetadata(r *os.Root, installation string) (metadata, error) {
 	if err != nil || len(token) != 32 {
 		return metadata{}, ErrKeystore
 	}
-	wrapped, err := readPrivate(r, "key.cred", 65536)
+	wrapped, err := readPrivate(r, host.WrappedCredential, 65536)
 	if err != nil || len(wrapped) == 0 {
 		return metadata{}, ErrKeystore
 	}
@@ -204,11 +165,11 @@ func Inspect(stateDir, installation string) (metadata, error) {
 		return metadata{}, err
 	}
 	defer parent.Close()
-	i, err := parent.Lstat("device-api")
-	if err != nil || !i.IsDir() || !privateInfo(i, 0700) {
+	i, err := parent.Lstat(host.DeviceAPIDir)
+	if err != nil || !privatefile.EffectiveOwner().Directory(i, 0700) {
 		return metadata{}, ErrKeystore
 	}
-	r, err := parent.OpenRoot("device-api")
+	r, err := parent.OpenRoot(host.DeviceAPIDir)
 	if err != nil {
 		return metadata{}, ErrKeystore
 	}
@@ -232,11 +193,10 @@ func Initialize(ctx context.Context, stateDir, installation string, wrap func(co
 		return err
 	}
 	defer lock.Close()
-	if syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) != nil {
+	if privatefile.TryLock(lock) != nil {
 		return ErrKeystore
 	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
-	if _, err := r.Lstat("device-api"); err == nil {
+	if _, err := r.Lstat(host.DeviceAPIDir); err == nil {
 		_, err := Inspect(stateDir, installation)
 		return err
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -276,13 +236,13 @@ func Initialize(ctx context.Context, stateDir, installation string, wrap func(co
 	digest := sha256.Sum256(key)
 	m := metadata{1, installation, "k1_" + base64.RawURLEncoding.EncodeToString(kid), hex.EncodeToString(digest[:]), base64.RawURLEncoding.EncodeToString(token), 0, "host"}
 	b, _ := json.Marshal(m)
-	if writeNew(tmp, "key.cred", wrapped) != nil || writeNew(tmp, "state.json", b) != nil || syncRoot(tmp) != nil {
+	if writeNew(tmp, host.WrappedCredential, wrapped) != nil || writeNew(tmp, "state.json", b) != nil || syncRoot(tmp) != nil {
 		return ErrKeystore
 	}
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	if r.Rename(name, "device-api") != nil {
+	if r.Rename(name, host.DeviceAPIDir) != nil {
 		return ErrKeystore
 	}
 	return syncRoot(r)
@@ -303,9 +263,10 @@ func (w *cappedWriter) Write(p []byte) (int, error) {
 func WrapHost(parent context.Context, key []byte) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "/usr/bin/systemd-creds", "encrypt", "--with-key=host", "--name=device-api-key", "-", "-")
-	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C", "SYSTEMD_LOG_LEVEL=err"}
-	cmd.Dir = "/"
+	layout := host.DefaultLayout()
+	cmd := exec.CommandContext(ctx, layout.SystemdCreds, "encrypt", "--with-key=host", "--name=device-api-key", "-", "-")
+	cmd.Env = []string{"PATH=" + layout.SystemdCredsPATH, "LANG=C", "SYSTEMD_LOG_LEVEL=err"}
+	cmd.Dir = layout.SystemdCredsWorkDir
 	cmd.Stdin = bytes.NewReader(key)
 	cmd.Stderr = io.Discard
 	cmd.WaitDelay = time.Second
