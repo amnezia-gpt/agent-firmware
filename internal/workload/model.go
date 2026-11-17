@@ -101,6 +101,9 @@ func FromInput(input *configuration.Input) (Stack, error) {
 			Aliases: slices.Clone(service.Aliases), DependsOn: slices.Clone(service.DependsOn),
 			Env: make(map[string]string, len(service.Environment)),
 		}
+		if !slices.Contains(spec.Aliases, name) {
+			spec.Aliases = append(spec.Aliases, name)
+		}
 		slices.Sort(spec.Aliases)
 		slices.Sort(spec.DependsOn)
 		for key, value := range service.Environment {

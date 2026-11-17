@@ -58,6 +58,17 @@ list.
 - [ ] The pinned release file is byte-identical to the manifest the workload release published, and the release
   workflow fails otherwise.
 
+## Defect Found In Review (2026-11-17)
+
+- A service is not reachable by its own name. The engine gives a container only the aliases the manifest lists,
+  and the container name carries the enrollment prefix. The first real stack description relies on the service
+  name as a host name, as a Compose tool would provide it, so its services cannot reach each other. The design now
+  states that the service name is always a network name of the service.
+- [x] The resolved container spec includes the service name once along with any listed aliases. Container
+  creation, the spec hash and drift detection use that same alias list. A regression test applies a manifest
+  with a service that declares no aliases and a second service with both its own name and an explicit alias.
+  The regression passed locally and in an isolated Ubuntu 24.04 container on native Linux amd64.
+
 ## Open Decisions
 
 Resource limits for containers; see DESIGN.md.

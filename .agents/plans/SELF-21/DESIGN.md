@@ -122,7 +122,9 @@ envelope is still enforced: a mistaken or hostile manifest cannot reach the host
 - Every volume a service mounts is declared at the top level; every declared volume is mounted at least once.
 - `depends_on` names existing services; no cycles; no self-dependency.
 - `device_api_client.service` is an existing service.
-- Aliases are unique across services and differ from other services' names.
+- A service is reachable on the enrollment's network by its own name and by its aliases; the firmware adds the
+  service name as a network name without it being listed. Aliases are unique across services and differ from
+  other services' names.
 - In one service: no volume twice, no target twice, no target inside another target, no target at or under a path
   the firmware provides (`/tmp`); targets are clean absolute paths.
 - The host platform is in `platforms`; `device_api` is a version the firmware serves.

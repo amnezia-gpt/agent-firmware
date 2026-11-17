@@ -20,11 +20,30 @@ func TestReleaseVectorsBuildAndApplyAnotherStack(t *testing.T) {
 	if err := json.Unmarshal(raw, &vectors); err != nil {
 		t.Fatal(err)
 	}
+	// Exercise an implicit service name and a distinct explicit alias.
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(vectors.Valid, &fields); err != nil {
+		t.Fatal(err)
+	}
+	var services map[string]map[string]json.RawMessage
+	if err := json.Unmarshal(fields["services"], &services); err != nil {
+		t.Fatal(err)
+	}
+	delete(services["worker"], "aliases")
+	services["front"]["aliases"] = json.RawMessage(`["front","ingress"]`)
+	fields["services"], err = json.Marshal(services)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
 	profile, err := os.ReadFile("../backendprofile/testdata/profile-v4.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	stack, err := FromReaders(bytes.NewReader(profile), bytes.NewReader(vectors.Valid))
+	stack, err := FromReaders(bytes.NewReader(profile), bytes.NewReader(release))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,6 +51,10 @@ func TestReleaseVectorsBuildAndApplyAnotherStack(t *testing.T) {
 		stack.Specs[0].Env["API_BASE_URL"] != "https://resource.example/api" || stack.Client.Service != "front" ||
 		stack.Installation != EnrollmentID("https://auth.example") {
 		t.Fatal("manifest was not resolved into the expected stack")
+	}
+	if !slices.Equal(stack.Specs[0].Aliases, []string{"front", "ingress"}) ||
+		!slices.Equal(stack.Specs[1].Aliases, []string{"worker"}) {
+		t.Fatalf("wrong network aliases: front=%v worker=%v", stack.Specs[0].Aliases, stack.Specs[1].Aliases)
 	}
 
 	engine := fake()
