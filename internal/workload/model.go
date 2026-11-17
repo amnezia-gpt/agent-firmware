@@ -68,8 +68,8 @@ func FromReaders(p, r io.Reader) (Stack, error) {
 }
 func FromInput(input *configuration.Input) Stack {
 	p, r := input.Profile(), input.Release()
-	// Installation identity predates the API profile. Freeze its namespace salt;
-	// compatibility upgrades must never allocate a second identity/data set.
+	// Keep the current stack namespace until the manifest and its enrollment
+	// namespace change together.
 	sum := sha256.Sum256([]byte("urn:amnezia-gpt:workload-contract:device:v1\n" + p.ID + "\n" + p.AuthIssuer))
 	id := hex.EncodeToString(sum[:16])
 	prefix := "af-" + id
@@ -85,13 +85,11 @@ func FromInput(input *configuration.Input) Stack {
 		{Installation: id, Role: "agent", Name: prefix + "-agent", Image: r.CodexImage, Network: stack.Network, Alias: "codex-app-server", ReadOnly: true, HealthStart: 60, StopSeconds: 20, Mounts: []Mount{{volume("agent-home"), "/home/codex/.codex", false}, {volume("agent-workspace"), "/codex-workspace", false}, {volume("agent-auth"), "/run/amgpt-codex", true}}},
 		{Installation: id, Role: "storage", Name: prefix + "-storage", Image: r.CodexImage, Network: stack.Network, Alias: "codex-storage", ReadOnly: true, HealthStart: 60, StopSeconds: 20, Mounts: []Mount{{volume("storage-home"), "/home/codex/.codex", false}, {volume("storage-workspace"), "/codex-workspace", false}, {volume("storage-auth"), "/run/amgpt-codex", true}}},
 	}
-	if r.Contract == "urn:amnezia-gpt:workload-contract:device:v2" {
-		gateway := &stack.Specs[0]
-		gateway.Env["FIRMWARE_DEVICE_API_MODE"] = "required"
-		gateway.Env["FIRMWARE_DEVICE_API_SOCKET"] = "/run/firmware-device-api/socket"
-		gateway.Env["FIRMWARE_DEVICE_API_TOKEN_FILE"] = "/run/firmware-device-api-auth/token"
-		gateway.Bindings = []Binding{{APIRuntimeDir(id) + "/api", "/run/firmware-device-api", true}, {APIRuntimeDir(id) + "/auth", "/run/firmware-device-api-auth", true}}
-	}
+	gateway := &stack.Specs[0]
+	gateway.Env["FIRMWARE_DEVICE_API_MODE"] = "required"
+	gateway.Env["FIRMWARE_DEVICE_API_SOCKET"] = "/run/firmware-device-api/socket"
+	gateway.Env["FIRMWARE_DEVICE_API_TOKEN_FILE"] = "/run/firmware-device-api-auth/token"
+	gateway.Bindings = []Binding{{APIRuntimeDir(id) + "/api", "/run/firmware-device-api", true}, {APIRuntimeDir(id) + "/auth", "/run/firmware-device-api-auth", true}}
 	return stack
 }
 

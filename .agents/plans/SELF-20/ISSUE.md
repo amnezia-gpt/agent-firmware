@@ -21,8 +21,8 @@ or another domain, with the same IDevID.
 
 ## Scope
 
-- Ask the workload to deregister at the domain through its existing control command; a domain that cannot be
-  reached does not block local removal, and the outcome is reported.
+- Ask the workload to deregister at the domain with the manifest's `device_api_client.deregister` command.
+  A domain that cannot be reached does not block local removal, and the outcome is reported.
 - Remove the enrollment's containers, network, volumes, operational keys and enrollment record. Only resources the
   firmware owns for this installation are touched.
 - Interrupted removal is resumed by the next run.

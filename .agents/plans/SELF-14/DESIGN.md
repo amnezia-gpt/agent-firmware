@@ -19,7 +19,7 @@ maps them onto this repository. Everything under "Target" is accepted direction,
 10. No backward compatibility: workload contracts v1 and v2, the monotonic API floor and the explicit key
     initialization command are removed.
 11. Standard library cryptography only (see "Cryptography").
-12. The device API is version 3, matching workload contract `device:v3`.
+12. The device API is version 3. The schema 3 release manifest declares `urn:agent-firmware:device-api:v3` in `device_api`.
 13. The firmware carries no knowledge of what a workload does. The device API offers device services only
     (identity, key operations, sealing, the enrollment code). The agent configuration watch is removed: it made
     the firmware read a workload's data and follow an agent's configuration format.
@@ -65,8 +65,9 @@ curl -fsSLo agent-firmware-install.sh <url> && sudo sh agent-firmware-install.sh
 | Enrollment | one-time code, at most one hour | `/run/agent-firmware/<installation>` |
 | Enrollment | network, containers, volumes | container engine, prefix `af-<installation>` |
 
-`<installation>` stays the hash of profile ID and issuer and names the enrollment. The device is identified by the
-thumbprint of its IDevID key.
+`<installation>` names the enrollment. It is the first 16 bytes, in hex, of SHA-256 over
+`urn:agent-firmware:enrollment:v1`, a line feed and the issuer. The device is identified by its IDevID thumbprint.
+See [SELF-21](../SELF-21/DESIGN.md#names-on-the-host).
 
 The saved configuration splits accordingly: the workload release belongs to the device, the backend profile to the
 enrollment.
@@ -111,8 +112,8 @@ copy it with its source noted. What the schema fixes beyond the table:
   longer exist; credential protection reports `software` and no key ID.
 - Identifiers of the device API use the neutral namespace `urn:agent-firmware:` (owner, 2026-11-17): the protocol
   `urn:agent-firmware:device-api:v3`, the services (`device-identity`, `signing`, `key-agreement`,
-  `credential-seal`, `enrollment-code`). The workload contract
-  identifier in the release manifest belongs to the workloads repository and is not renamed here.
+  `credential-seal`, `enrollment-code`). [SELF-21](../SELF-21/DESIGN.md) defines the release manifest that
+  declares the Device API identifier.
 - The vectors hold no private key: signing and key agreement use the keys published in RFC 7515 Appendix A.3 and
   RFC 7518 Appendix C (both recomputed when the file was built), statement vectors were signed with discarded keys
   and include seven rejection cases.
@@ -122,8 +123,8 @@ copy it with its source noted. What the schema fixes beyond the table:
 - The IDevID key is not reachable through the API. The firmware uses it only to issue the identity statement.
 - The workload cannot choose the statement's audience; the firmware uses the issuer of the enrollment record.
 - A compromised workload can request signatures and shared secrets while it runs. It cannot take a key.
-- The enrollment outcome and deregistration use one-shot execs of the workload's existing control commands, not
-  new routes.
+- Enrollment outcome and deregistration use one-shot execs of the manifest's `device_api_client` control commands
+  and the result formats in [SELF-21](../SELF-21/DESIGN.md#control-commands).
 
 ## Identity statement
 
@@ -167,7 +168,8 @@ Agreed before code: the device API v3 above, the identity statement above, the c
 | D | [SELF-19](../SELF-19/ISSUE.md) device API v3 over the stream | C2 |
 | E | [SELF-20](../SELF-20/ISSUE.md) `unenroll` | C1, D |
 
-Outside this repository, in parallel: the workload implements contract `device:v3` against the same test vectors;
+Outside this repository, in parallel: the workload implements Device API v3 against the same test vectors and
+publishes a schema 3 release manifest;
 the domain accepts and records the identity statement (optional first, required after the joint release) and
 shows the new command. The joint release and one real-host check close the feature.
 

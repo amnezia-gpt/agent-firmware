@@ -24,7 +24,6 @@ type host struct {
 	enabled            bool
 	fragment           string
 	fail               map[string]bool
-	api                bool
 	code               string
 	writeEngineAddress bool
 }
@@ -37,7 +36,7 @@ func newHost(t *testing.T) *host {
 		t.Fatal(err)
 	}
 	stat := info.Sys().(*syscall.Stat_t)
-	h := &host{t: t, fail: map[string]bool{}, api: true}
+	h := &host{t: t, fail: map[string]bool{}}
 	h.layout = hostplatform.Layout{
 		Base:    filepath.Join(root, "lib", "agent-firmware"),
 		Wrapper: filepath.Join(root, "bin", "agent-firmware"),
@@ -61,13 +60,8 @@ func newHost(t *testing.T) *host {
 	return h
 }
 
-func (h *host) Definition(api bool) []byte {
-	return (service.Systemd{Layout: h.layout}).Definition(api)
-}
-func (h *host) Owns(data []byte) bool { return (service.Systemd{Layout: h.layout}).Owns(data) }
-func (h *host) SupportsDeviceAPI(data []byte) bool {
-	return (service.Systemd{Layout: h.layout}).SupportsDeviceAPI(data)
-}
+func (h *host) Definition() []byte               { return (service.Systemd{Layout: h.layout}).Definition() }
+func (h *host) Owns(data []byte) bool            { return (service.Systemd{Layout: h.layout}).Owns(data) }
 func (h *host) Stop(ctx context.Context) error   { return h.do(ctx, "stop") }
 func (h *host) Start(ctx context.Context) error  { return h.do(ctx, "start") }
 func (h *host) Reload(ctx context.Context) error { return h.do(ctx, "daemon-reload") }
@@ -106,7 +100,7 @@ func (h *host) Fragment(context.Context) (string, error) {
 }
 func (h *host) Preflight(context.Context) error { return h.result("preflight") }
 func (h *host) Existing() error                 { return h.result("existing") }
-func (h *host) Configure() error {
+func (h *host) Configure(context.Context) error {
 	if err := h.result("configure"); err != nil {
 		return err
 	}
@@ -124,7 +118,6 @@ func (h *host) Configure() error {
 	}
 	return replace(filepath.Join(h.layout.State, "accepted.json"), []byte("new\n"), 0o600)
 }
-func (h *host) PrepareAPI(context.Context) (bool, error) { return h.api, h.result("prepare-api") }
 func (h *host) HoldCode(code string) error {
 	if err := h.result("hold-code"); err != nil {
 		return err
@@ -192,14 +185,14 @@ func TestFreshInstallation(t *testing.T) {
 		t.Fatalf("wrapper -> %q", target)
 	}
 	unit := h.read(h.layout.Unit)
-	if !strings.HasPrefix(unit, service.UnitMarker+"\n") || !strings.Contains(unit, ("LoadCredentialEncrypted=device-api-key:"+filepath.Join(h.layout.State, "device-api", "key.cred"))+"\nExecStart=") {
+	if !strings.HasPrefix(unit, service.UnitMarker+"\n") || strings.Contains(unit, "LoadCredential") || !strings.Contains(unit, "ExecStart=") {
 		t.Fatalf("unit:\n%s", unit)
 	}
 	if info, _ := os.Stat(h.layout.Unit); info.Mode().Perm() != 0o644 {
 		t.Fatal("unit mode")
 	}
 	// The code is held after enable and before start, and is in no installer-owned file.
-	h.order("preflight", "configure", "prepare-api", "systemd daemon-reload", "systemd enable", "hold-code", "systemd start")
+	h.order("preflight", "configure", "systemd daemon-reload", "systemd enable", "hold-code", "systemd start")
 	h.noTransaction()
 	_ = filepath.WalkDir(h.layout.Base, func(path string, entry os.DirEntry, _ error) error {
 		if entry != nil && entry.Type().IsRegular() && strings.Contains(h.read(path), testCode) {
@@ -210,27 +203,6 @@ func TestFreshInstallation(t *testing.T) {
 	if strings.Contains(unit, testCode) {
 		t.Fatal("code in unit")
 	}
-}
-
-func TestReleaseWithoutDeviceAPI(t *testing.T) {
-	h := newHost(t)
-	h.api = false
-	if err := h.install("version one", ""); err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(h.read(h.layout.Unit), "LoadCredentialEncrypted") {
-		t.Fatal("credential in unit")
-	}
-	// A code cannot be handed over without the device API; the first installation is undone.
-	h2 := newHost(t)
-	h2.api = false
-	if err := h2.install("version one", testCode); err != ErrCodeAPI {
-		t.Fatal(err)
-	}
-	if lexists(h2.layout.Unit) || lexists(h2.layout.Wrapper) || lexists(filepath.Join(h2.layout.Base, "current")) || h2.code != "" {
-		t.Fatal("installation not undone")
-	}
-	h2.noTransaction()
 }
 
 func TestReinstallationAndUpgrade(t *testing.T) {
@@ -260,12 +232,11 @@ func TestFailedUpgradeReturnsThePreviousInstallation(t *testing.T) {
 		name string
 		want error
 	}{
-		{"configure", ErrConfigure}, {"prepare-api", ErrAPI}, {"daemon-reload", ErrReload},
+		{"configure", ErrConfigure}, {"daemon-reload", ErrReload},
 		{"enable", ErrEnable}, {"hold-code", ErrCode}, {"dies", ErrStart},
 	} {
 		t.Run(failure.name, func(t *testing.T) {
 			h := newHost(t)
-			h.api = false
 			if err := h.install("version one", ""); err != nil {
 				t.Fatal(err)
 			}
@@ -273,7 +244,6 @@ func TestFailedUpgradeReturnsThePreviousInstallation(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(h.layout.State, "accepted.json"), []byte("old\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			h.api = true
 			h.fail[failure.name] = true
 			err := h.install("version two", testCode)
 			// The first failing call is the installation step; recovery repeats daemon-reload and enable.
@@ -322,7 +292,7 @@ func TestInterruptedTransactionIsRecoveredByTheNextRun(t *testing.T) {
 	if err := r.prepare(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(r.transaction, "format"), []byte("2\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(r.transaction, "format"), []byte("1\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.install("version three", ""); err != ErrRecovery {

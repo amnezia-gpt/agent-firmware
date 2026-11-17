@@ -55,35 +55,24 @@ def main():
     try:
         profile_path = root / "profile.json"
         profile_path.write_text(json.dumps(profile))
-        legacy = repository / "internal/workloadrelease/testdata/manifest.json"
-        release = json.loads(legacy.read_text())
-        release["workload_contract"] = "urn:amnezia-gpt:workload-contract:device:v2"
-        release_path = root / "release.json"
-        release_path.write_text(json.dumps(release))
-        def configure(path):
-            run(str(firmware), "configure", "--state-dir", str(state),
-                "--profile", str(profile_path), "--release", str(path))
-        # A separate fresh profile exercises automatic initial preparation.
+        release_path = repository / "internal/workloadrelease/testdata/manifest.json"
+
+        def configure(directory, check=True):
+            return run(str(firmware), "configure", "--state-dir", str(directory),
+                       "--profile", str(profile_path), "--release", str(release_path), check=check)
+
+        # Reconfiguration keeps the root secret. Missing state custody fails closed.
         fresh_state = root / "fresh-state"
-        fresh_state.mkdir(mode=0o700)
-        fresh_profile = dict(profile)
-        fresh_profile["backend_profile"] += "-fresh"
-        fresh_path = root / "fresh-profile.json"
-        fresh_path.write_text(json.dumps(fresh_profile))
-        run(str(firmware), "configure", "--state-dir", str(fresh_state),
-            "--profile", str(fresh_path), "--release", str(release_path))
-        run(str(firmware), "prepare-device-api", "--state-dir", str(fresh_state))
-        metadata = fresh_state / "device-api/state.json"
-        original = metadata.read_bytes()
-        run(str(firmware), "prepare-device-api", "--state-dir", str(fresh_state))
-        assert metadata.read_bytes() == original, "repeat preparation changed key identity"
-        (fresh_state / "device-api/key.cred").unlink()
-        assert run(str(firmware), "prepare-device-api", "--state-dir", str(fresh_state), check=False).returncode == 1
-        assert metadata.read_bytes() == original, "missing key triggered reset"
-        configure(legacy)
-        run(str(firmware), "device-api-init", "--state-dir", str(state))
-        configure(release_path)
-        assert json.loads(run(str(firmware), "prepare-device-api", "--state-dir", str(state)).stdout) == {"enabled": True}
+        configure(fresh_state)
+        secret = fresh_state / "root-secret"
+        before = secret.stat()
+        assert before.st_mode & 0o777 == 0o600 and before.st_size == 32
+        configure(fresh_state)
+        assert secret.stat().st_ino == before.st_ino
+        secret.unlink()
+        assert configure(fresh_state, check=False).returncode == 1
+        assert not secret.exists(), "missing root secret was replaced"
+        configure(state)
         assert run(str(firmware), "apply", "--state-dir", str(state), check=False).returncode == 1
         # A deliberately conflicting test-owned network stops workload preflight
         # before pulls/container/volume creation. It is never adopted or removed
@@ -101,7 +90,6 @@ def main():
             "--property=RuntimeDirectory=agent-firmware", "--property=RuntimeDirectoryMode=0700",
             "--property=RuntimeDirectoryPreserve=yes",
             "--property=ReadWritePaths=" + str(state) + " /run/agent-firmware",
-            "--property=LoadCredentialEncrypted=device-api-key:" + str(state / "device-api/key.cred"),
             str(firmware), "serve", "--state-dir", str(state))
         socket = runtime / "api/socket"
         for _ in range(100):
@@ -122,9 +110,6 @@ def main():
                     "--env=AF_DEVICE_API_CONTAINER_PROBE=1", "--env=AF_DEVICE_API_EXPECT=200",
                     "--entrypoint=/api-probe", args.image, "-test.run=^TestLinuxContainerProbe$", "-test.timeout=10s")
         probe()
-        assert (state / "device-api-required").read_text() == "required\n"
-        assert run(str(firmware), "configure", "--state-dir", str(state),
-                   "--profile", str(profile_path), "--release", str(legacy), check=False).returncode == 1
         run("systemctl", "restart", unit)
         for _ in range(100):
             if socket.exists():
@@ -132,7 +117,7 @@ def main():
             time.sleep(0.05)
         assert (runtime / "api").stat().st_ino == inode, "bound directory replaced"
         probe()
-        print("PASS sandboxed firmware API, credential load, independent crypto lock, restart and downgrade refusal")
+        print("PASS sandboxed firmware API, software root secret, independent crypto operations and restart")
     finally:
         if started:
             run("systemctl", "stop", unit, check=False)

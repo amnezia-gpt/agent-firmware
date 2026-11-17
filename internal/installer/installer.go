@@ -35,8 +35,6 @@ const (
 	ErrDocker      Error = "docker_prerequisite_failed"
 	ErrExisting    Error = "invalid_existing_configuration"
 	ErrConfigure   Error = "configuration_rejected"
-	ErrAPI         Error = "device_api_preparation_failed"
-	ErrCodeAPI     Error = "enrollment_requires_device_api"
 	ErrCode        Error = "enrollment_code_rejected"
 	ErrSystemd     Error = "systemd_unavailable"
 	ErrStop        Error = "service_stop_failed"
@@ -48,15 +46,14 @@ const (
 const (
 	managedMarker = "agent-firmware-installer-v1"
 	// The transaction layout is versioned so a later firmware never guesses at an older one.
-	transactionFormat = "1"
+	transactionFormat = "2"
 	maxBinary         = 64 << 20
 )
 
 // ServiceManager supplies the platform's service definition and operations.
 type ServiceManager interface {
-	Definition(deviceAPI bool) []byte
+	Definition() []byte
 	Owns(definition []byte) bool
-	SupportsDeviceAPI(definition []byte) bool
 	Stop(context.Context) error
 	Start(context.Context) error
 	Reload(context.Context) error
@@ -71,9 +68,7 @@ type Firmware interface {
 	Preflight(ctx context.Context) error
 	// Existing checks the retained configuration of an earlier installation, if any.
 	Existing() error
-	Configure() error
-	// PrepareAPI reports whether the configured release uses the local device API.
-	PrepareAPI(ctx context.Context) (bool, error)
+	Configure(context.Context) error
 	HoldCode(code string) error
 	ClearCode()
 }
@@ -217,15 +212,8 @@ func Install(ctx context.Context, request Request) (err error) {
 			return err
 		}
 	}
-	if err = step(ErrConfigure, r.Firmware.Configure); err != nil {
+	if err = step(ErrConfigure, func() error { return r.Firmware.Configure(ctx) }); err != nil {
 		return err
-	}
-	api := false
-	if err = step(ErrAPI, func() (e error) { api, e = r.Firmware.PrepareAPI(ctx); return e }); err != nil {
-		return err
-	}
-	if r.Code != "" && !api {
-		return ErrCodeAPI
 	}
 	if err = step(ErrWrite, func() error {
 		if r.pointer("releases/"+r.digest) != nil {
@@ -236,7 +224,7 @@ func Install(ctx context.Context, request Request) (err error) {
 				return ErrWrite
 			}
 		}
-		if replace(l.Unit, r.Services.Definition(api), 0o644) != nil {
+		if replace(l.Unit, r.Services.Definition(), 0o644) != nil {
 			return ErrWrite
 		}
 		return syncPath(l.Base)
@@ -436,17 +424,10 @@ func (r *run) recover() error {
 	if has("committed") || !has("prepared") {
 		return os.RemoveAll(t)
 	}
-	if has("format") && !hasLine(filepath.Join(t, "format"), transactionFormat) {
+	if !hasLine(filepath.Join(t, "format"), transactionFormat) {
 		return ErrRecovery
 	}
 	ctx := context.Background()
-	// Once the device API may have issued ciphertext, never restart a pre-API reader.
-	floor := filepath.Join(l.State, hostplatform.DeviceAPIFloor)
-	if lexists(floor) {
-		if !r.safeFile(floor, 0o600) || !hasLine(floor, "required") || !has("had-unit") || !checkDefinition(filepath.Join(t, "unit"), r.Services.SupportsDeviceAPI) {
-			return ErrRecovery
-		}
-	}
 	if isFile(l.Unit) {
 		if !r.safeFile(l.Unit, 0o644) || !checkDefinition(l.Unit, r.Services.Owns) || r.Services.Stop(ctx) != nil {
 			return ErrRecovery

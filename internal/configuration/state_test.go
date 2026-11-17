@@ -419,39 +419,3 @@ func TestExclusiveSessionSharesWriterLockAndPersistsOperation(t *testing.T) {
 		t.Fatal(err)
 	}
 }
-
-func TestDeviceAPIProfileUpgradeHasNoAutomaticDowngrade(t *testing.T) {
-	legacy := testInput(t)
-	store := testStore(t)
-	upgraded, err := Parse(bytes.NewReader(legacy.profileBytes), bytes.NewReader(bytes.ReplaceAll(legacy.releaseBytes, []byte("workload-contract:device:v1"), []byte("workload-contract:device:v2"))))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Save(legacy); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Save(upgraded); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Save(legacy); err == nil {
-		t.Fatal("silent API downgrade accepted")
-	}
-	retained, err := store.Load()
-	if err != nil || retained.Generation() != upgraded.Generation() {
-		t.Fatal("downgrade changed accepted input")
-	}
-}
-
-func TestDeviceAPIFloorSurvivesAcceptedSnapshotRollback(t *testing.T) {
-	legacy := testInput(t)
-	s := testStore(t)
-	if _, err := s.Save(legacy); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Exclusive(func(session *Session) error { return session.RequireDeviceAPI() }); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.Save(legacy); err == nil {
-		t.Fatal("legacy input bypassed persistent API floor")
-	}
-}

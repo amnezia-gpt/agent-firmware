@@ -18,7 +18,6 @@ import (
 	"github.com/amnezia-gpt/agent-firmware/internal/service"
 	"github.com/amnezia-gpt/agent-firmware/internal/supervisor"
 	"github.com/amnezia-gpt/agent-firmware/internal/workload"
-	"github.com/amnezia-gpt/agent-firmware/internal/workloadrelease"
 )
 
 func main() {
@@ -95,7 +94,7 @@ var defaultStateDir = hostLayout.State
 func runConfiguration(args []string, input io.Reader, stdout, stderr io.Writer) int {
 	command := args[0]
 	enrollment := command == "enrollment-code-set" || command == "enrollment-code-clear"
-	if command != "validate" && command != "configure" && command != "status" && command != "apply" && command != "serve" && command != "device-api-init" && command != "prepare-device-api" && !enrollment {
+	if command != "validate" && command != "configure" && command != "status" && command != "apply" && command != "serve" && !enrollment {
 		return report(stderr, "invalid_usage", 2)
 	}
 	options := map[string]string{}
@@ -110,7 +109,7 @@ func runConfiguration(args []string, input io.Reader, stdout, stderr io.Writer) 
 		}
 		options[args[i]] = args[i+1]
 	}
-	if command == "status" || command == "apply" || command == "serve" || command == "device-api-init" || command == "prepare-device-api" || enrollment {
+	if command == "status" || command == "apply" || command == "serve" || enrollment {
 		if options["--profile"] != "" || options["--release"] != "" {
 			return report(stderr, "invalid_usage", 2)
 		}
@@ -135,22 +134,11 @@ func runConfiguration(args []string, input io.Reader, stdout, stderr io.Writer) 
 			EnrollmentCode string `json:"enrollment_code"`
 		}{state})
 	}
-	if command == "device-api-init" || command == "prepare-device-api" {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		enabled, err := prepareAPI(ctx, store, command == "device-api-init")
-		if err != nil {
-			return report(stderr, err.Error(), 1)
-		}
-		return respond(stdout, stderr, struct {
-			Enabled bool `json:"enabled"`
-		}{enabled})
-	}
 	if command == "apply" || command == "serve" {
 		parent, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		if command == "serve" {
-			manager := &apiManager{state: dir}
+			manager := &apiManager{}
 			defer manager.close()
 			notifier := (service.Systemd{Layout: hostLayout}).Notifier()
 			err := supervisor.Run(parent, func(ctx context.Context) (bool, error) {
@@ -220,7 +208,7 @@ func runConfiguration(args []string, input io.Reader, stdout, stderr io.Writer) 
 		}{true})
 	}
 
-	changed, err := store.Save(accepted)
+	changed, err := saveConfiguration(context.Background(), store, accepted)
 	if err != nil {
 		return report(stderr, err.Error(), 1)
 	}
@@ -276,24 +264,12 @@ func executeManaged(parent context.Context, store configuration.Store, manager *
 		if err != nil {
 			return err
 		}
-		required, e := session.DeviceAPIRequired()
-		if e != nil {
-			return e
-		}
-		if required && input.Release().Contract != workloadrelease.DeviceAPIContract {
-			return configuration.ErrContractDowngrade
-		}
-		if manager != nil {
-			if err := manager.ensure(input); err != nil {
-				return err
-			}
-		} else if input.Release().Contract == workloadrelease.DeviceAPIContract {
+		if manager == nil {
 			return errAPIServe
 		}
-		if input.Release().Contract == workloadrelease.DeviceAPIContract {
-			if err := session.RequireDeviceAPI(); err != nil {
-				return err
-			}
+		if err := manager.ensure(session, input); err != nil {
+			manager.close()
+			return err
 		}
 		address, err := session.EngineAddress()
 		if err != nil {
@@ -306,10 +282,12 @@ func executeManaged(parent context.Context, store configuration.Store, manager *
 		defer engine.Close()
 		stack := workload.FromInput(input)
 		result, err = workload.Apply(ctx, engine, session, stack)
-		if err == nil && manager != nil {
-			manager.bind(ctx, engine, stack)
-		}
 		return err
 	})
+	if errors.Is(err, configuration.ErrRootSecret) || errors.Is(err, configuration.ErrCorrupt) ||
+		errors.Is(err, configuration.ErrMissing) || errors.Is(err, configuration.ErrRead) ||
+		errors.Is(err, configuration.ErrUnsafe) {
+		manager.close()
+	}
 	return result, err
 }

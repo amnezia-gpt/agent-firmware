@@ -17,26 +17,27 @@ type Error string
 func (e Error) Error() string { return string(e) }
 
 const (
-	ErrInvalid           Error = "invalid_configuration"
-	ErrMissing           Error = "not_configured"
-	ErrUnsafe            Error = "unsafe_state_storage"
-	ErrRead              Error = "state_read_failed"
-	ErrWrite             Error = "state_write_failed"
-	ErrCorrupt           Error = "corrupt_state"
-	ErrBusy              Error = "operation_busy"
-	ErrPending           Error = "operation_recovery_required"
-	ErrUncertain         Error = "state_commit_uncertain"
-	ErrContractDowngrade Error = "workload_contract_downgrade"
-	ErrIdentityConflict  Error = "identity_configuration_conflict"
+	ErrInvalid          Error = "invalid_configuration"
+	ErrMissing          Error = "not_configured"
+	ErrUnsafe           Error = "unsafe_state_storage"
+	ErrRead             Error = "state_read_failed"
+	ErrWrite            Error = "state_write_failed"
+	ErrCorrupt          Error = "corrupt_state"
+	ErrBusy             Error = "operation_busy"
+	ErrPending          Error = "operation_recovery_required"
+	ErrUncertain        Error = "state_commit_uncertain"
+	ErrRootSecret       Error = "keystore_unavailable"
+	ErrIdentityConflict Error = "identity_configuration_conflict"
 )
 
 // Input can only be constructed by validating both supplied documents.
 type Input struct {
-	profile      backendprofile.Profile
-	release      workloadrelease.Release
-	profileBytes []byte
-	releaseBytes []byte
-	generation   string
+	profile         backendprofile.Profile
+	release         workloadrelease.Release
+	profileBytes    []byte
+	releaseBytes    []byte
+	generation      string
+	rootFingerprint string
 }
 
 func (i *Input) Generation() string               { return i.generation }
@@ -71,5 +72,8 @@ func Parse(profile, release io.Reader) (*Input, error) {
 		Release workloadrelease.Release
 	}{parsedProfile, parsedRelease})
 	digest := sha256.Sum256(append([]byte("agent-firmware-config-v1\x00"), canonical...))
-	return &Input{parsedProfile, parsedRelease, p, r, "sha256:" + hex.EncodeToString(digest[:])}, nil
+	return &Input{
+		profile: parsedProfile, release: parsedRelease, profileBytes: p, releaseBytes: r,
+		generation: "sha256:" + hex.EncodeToString(digest[:]),
+	}, nil
 }

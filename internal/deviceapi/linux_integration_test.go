@@ -12,13 +12,12 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
 
-// Explicit opt-in only: these tests create their own Docker/systemd resources on
+// Explicit opt-in only: these tests create their own Docker resources on
 // the selected disposable Linux host. Ordinary go test never operates a host.
 func linuxHostTest(t *testing.T) {
 	t.Helper()
@@ -26,7 +25,7 @@ func linuxHostTest(t *testing.T) {
 		t.Skip("selected disposable root Linux host required")
 	}
 }
-func TestLinuxAPIIsolationRestartAndSystemdCredential(t *testing.T) {
+func TestLinuxAPIIsolationAndRestart(t *testing.T) {
 	linuxHostTest(t)
 	image := os.Getenv("AF_DEVICE_API_TEST_IMAGE")
 	if !strings.HasPrefix(image, "sha256:") || len(image) != 71 {
@@ -37,26 +36,14 @@ func TestLinuxAPIIsolationRestartAndSystemdCredential(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(root)
-	state := root + "/state"
-	os.Mkdir(state, 0700)
 	installation := strings.Repeat("3", 32)
-	var key []byte
-	if err := Initialize(t.Context(), state, installation, func(ctx context.Context, k []byte) ([]byte, error) { key = bytes.Clone(k); return WrapHost(ctx, k) }); err != nil {
-		t.Fatal("host wrap:", err)
-	}
+	key := bytes.Repeat([]byte{3}, 32)
 	defer clear(key)
-	// PID 1 loads the encrypted credential. The service verifies it without printing
-	// key material or copying plaintext credentials into a persistent directory.
-	executable, _ := os.Executable()
-	unit := "af-self7-credential-" + filepath.Base(root)
-	cmd := exec.CommandContext(t.Context(), "systemd-run", "--quiet", "--wait", "--collect", "--unit="+unit,
-		"--property=Type=exec", "--property=LoadCredentialEncrypted=device-api-key:"+state+"/device-api/key.cred",
-		"--setenv=AF_DEVICE_API_SYSTEMD_PROBE=1", "--setenv=AF_DEVICE_API_STATE="+state,
-		executable, "-test.run=^TestSystemdCredentialProbe$")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("systemd credential load failed: %v (%d diagnostic bytes)", err, len(out))
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
 	}
-	rt, err := startAt(state, root+"/runtime/installation", installation, key)
+	rt, err := startAt(root+"/runtime/installation", installation, key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,11 +52,6 @@ func TestLinuxAPIIsolationRestartAndSystemdCredential(t *testing.T) {
 			rt.Close()
 		}
 	}()
-	home := root + "/agent-home"
-	os.Mkdir(home, 0700)
-	if err := rt.Watch.Bind(home); err != nil {
-		t.Fatal(err)
-	}
 	runProbe := func(user, want string) {
 		t.Helper()
 		cmd := exec.CommandContext(t.Context(), "docker", "run", "--rm", "--interactive", "--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--user="+user,
@@ -88,43 +70,20 @@ func TestLinuxAPIIsolationRestartAndSystemdCredential(t *testing.T) {
 	}
 	runProbe("65532:65532", "200")
 	runProbe("0:65532", "403")
-	blob, err := rt.Vault.Seal(t.Context(), "mcp-oauth", "server", []byte("restart-example"))
+	blob, err := rt.Vault.Seal(t.Context(), "example-purpose", "server", []byte("restart-example"))
 	if err != nil {
 		t.Fatal(err)
-	}
-	first, _ := rt.Watch.Wait(t.Context(), "", 0)
-	if err := os.WriteFile(home+"/config.toml.new", []byte("example=true"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Rename(home+"/config.toml.new", home+"/config.toml"); err != nil {
-		t.Fatal(err)
-	}
-	changed, err := rt.Watch.Wait(t.Context(), first.Cursor, time.Second)
-	if err != nil || !changed.Resync {
-		t.Fatal("atomic replacement was lost")
-	}
-	// A symlink's target is never opened or watched.
-	outside := root + "/outside"
-	os.WriteFile(outside, []byte("private-example"), 0600)
-	os.Remove(home + "/config.toml")
-	os.Symlink(outside, home+"/config.toml")
-	time.Sleep(250 * time.Millisecond)
-	baseline, _ := rt.Watch.Wait(t.Context(), "", 0)
-	os.WriteFile(outside, []byte("changed-example"), 0600)
-	noChange, err := rt.Watch.Wait(t.Context(), baseline.Cursor, 200*time.Millisecond)
-	if err != nil || noChange.Resync {
-		t.Fatal("symlink target followed")
 	}
 	if err := rt.Close(); err != nil {
 		t.Fatal(err)
 	}
 	rt = nil
-	reopened, err := startAt(state, root+"/runtime/installation", installation, key)
+	reopened, err := startAt(root+"/runtime/installation", installation, key)
 	if err != nil {
 		t.Fatal("restart:", err)
 	}
 	rt = reopened
-	plain, err := rt.Vault.Unseal("mcp-oauth", "server", blob)
+	plain, err := rt.Vault.Unseal("example-purpose", "server", blob)
 	if err != nil || string(plain) != "restart-example" {
 		t.Fatal("restart lost encrypted data")
 	}
@@ -134,30 +93,8 @@ func TestLinuxAPIIsolationRestartAndSystemdCredential(t *testing.T) {
 		t.Fatal(err)
 	}
 	rt = nil
-	// No key replacement, even after the encrypted credential disappears.
-	os.Remove(state + "/device-api/key.cred")
-	if err := Initialize(t.Context(), state, installation, WrapHost); err != ErrKeystore {
-		t.Fatal("missing credential regenerated")
-	}
 }
-func TestSystemdCredentialProbe(t *testing.T) {
-	if os.Getenv("AF_DEVICE_API_SYSTEMD_PROBE") != "1" {
-		t.Skip("service helper")
-	}
-	key, err := LoadCredential(os.Getenv("CREDENTIALS_DIRECTORY"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer clear(key)
-	v, err := OpenVault(os.Getenv("AF_DEVICE_API_STATE"), strings.Repeat("3", 32), key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer v.Close()
-	if _, err := v.Seal(t.Context(), "gateway-session", "default", []byte("systemd-example")); err != nil {
-		t.Fatal(err)
-	}
-}
+
 func TestLinuxContainerProbe(t *testing.T) {
 	if os.Getenv("AF_DEVICE_API_CONTAINER_PROBE") != "1" {
 		t.Skip("container helper")
@@ -202,29 +139,19 @@ func TestLinuxContainerProbe(t *testing.T) {
 	if expected != "200" {
 		return
 	}
-	code, b := request("POST", "/v1/crypto/seal", `{"purpose":"gateway-session","record_id":"default","plaintext":"e30"}`)
+	code, b := request("POST", "/v1/crypto/seal", `{"purpose":"example-purpose","record_id":"default","plaintext":"e30"}`)
 	if code != 200 {
 		t.Fatalf("seal %d", code)
 	}
 	var sealed map[string]string
 	json.Unmarshal(b, &sealed)
-	body, _ := json.Marshal(map[string]string{"purpose": "gateway-session", "record_id": "default", "sealed": sealed["sealed"]})
+	body, _ := json.Marshal(map[string]string{"purpose": "example-purpose", "record_id": "default", "sealed": sealed["sealed"]})
 	code, b = request("POST", "/v1/crypto/unseal", string(body))
 	if code != 200 || !bytes.Contains(b, []byte(`"plaintext":"e30"`)) {
 		t.Fatal("UDS roundtrip failed")
 	}
-	code, b = request("GET", "/v1/config/agent/changes", "")
-	if code == 200 {
-		var initial Change
-		json.Unmarshal(b, &initial)
-		// Watch must outlive the unary two-second body budget.
-		client.Timeout = 5 * time.Second
-		transport.ResponseHeaderTimeout = 4 * time.Second
-		began := time.Now()
-		code, b = request("GET", "/v1/config/agent/changes?after="+initial.Cursor+"&wait_seconds=3", "")
-		if code != 200 || time.Since(began) < 2800*time.Millisecond {
-			t.Fatal("watch inherited unary timeout")
-		}
+	if code, _ := request("GET", "/v1/config/agent/changes", ""); code != 404 {
+		t.Fatal("configuration watch exposed")
 	}
 	if err := os.WriteFile("/run/firmware-device-api-auth/token", []byte("changed"), 0400); err == nil {
 		t.Fatal("token mount writable")

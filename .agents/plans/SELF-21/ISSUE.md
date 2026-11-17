@@ -37,6 +37,9 @@ workload-specific name.
   ports, no host mounts, all capabilities dropped, no new privileges, non-root users, images by digest.
 - The list of platforms moves into the same schema version, so the schema changes once.
 - Remove the hardcoded stack model, the two image slots and the role special cases.
+- `release/workload-release.json` is again an unmodified copy of a published workload manifest, and the firmware
+  refuses a manifest whose `device_api` it does not serve. (SELF-16 left a hand-edited pin without any
+  compatibility check; no firmware release is cut before this.)
 
 ## Not In Scope
 
@@ -52,6 +55,8 @@ list.
 - [ ] A manifest that leaves the safety envelope (host mount, published port, root user, tag instead of digest,
   unknown field) is rejected before any change.
 - [ ] A second, different valid manifest (other names, another service count) is applied by the same binary.
+- [ ] The pinned release file is byte-identical to the manifest the workload release published, and the release
+  workflow fails otherwise.
 
 ## Open Decisions
 

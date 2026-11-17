@@ -21,8 +21,8 @@ func callAPI(h http.Handler, uid uint32, token, method, path, body string) *http
 	return w
 }
 func TestHTTPAuthenticationStrictRequestsAndRoundTrip(t *testing.T) {
-	v, _, _ := testVault(t)
-	h := NewHandler(v, nil)
+	v, _ := testVault(t)
+	h := NewHandler(v)
 	for _, c := range []struct {
 		uid   uint32
 		token string
@@ -37,12 +37,12 @@ func TestHTTPAuthenticationStrictRequestsAndRoundTrip(t *testing.T) {
 		body string
 		code int
 	}{
-		{`{"purpose":"gateway-session","record_id":"default","plaintext":"e30"}`, 200},
-		{`{"purpose":"gateway-session","record_id":"default","plaintext":"e30="}`, 400},
-		{`{"purpose":"future-purpose","record_id":"default","plaintext":"e30"}`, 400},
-		{`{"purpose":"gateway-session","record_id":"default","plaintext":"e30","plaintext":"e30"}`, 400},
-		{`{"Purpose":"gateway-session","record_id":"default","plaintext":"e30"}`, 400},
-		{`{"purpose":"gateway-session","record_id":"default","plaintext":"e30","path":"/tmp/file"}`, 400},
+		{`{"purpose":"example-purpose","record_id":"default","plaintext":"e30"}`, 200},
+		{`{"purpose":"example-purpose","record_id":"default","plaintext":"e30="}`, 400},
+		{`{"purpose":"future-purpose","record_id":"default","plaintext":"e30"}`, 200},
+		{`{"purpose":"example-purpose","record_id":"default","plaintext":"e30","plaintext":"e30"}`, 400},
+		{`{"Purpose":"example-purpose","record_id":"default","plaintext":"e30"}`, 400},
+		{`{"purpose":"example-purpose","record_id":"default","plaintext":"e30","path":"/tmp/file"}`, 400},
 		{string(bytes.Repeat([]byte("x"), 128*1024+1)), 413},
 	} {
 		w := callAPI(h, 65532, v.token(), "POST", "/v1/crypto/seal", c.body)
@@ -55,7 +55,11 @@ func TestHTTPAuthenticationStrictRequestsAndRoundTrip(t *testing.T) {
 		if c.code == 200 {
 			var record map[string]string
 			json.Unmarshal(w.Body.Bytes(), &record)
-			b, _ := json.Marshal(map[string]string{"purpose": "gateway-session", "record_id": "default", "sealed": record["sealed"]})
+			request := map[string]string{}
+			if err := json.Unmarshal([]byte(c.body), &request); err != nil {
+				t.Fatal(err)
+			}
+			b, _ := json.Marshal(map[string]string{"purpose": request["purpose"], "record_id": "default", "sealed": record["sealed"]})
 			u := callAPI(h, 65532, v.token(), "POST", "/v1/crypto/unseal", string(b))
 			if u.Code != 200 || !strings.Contains(u.Body.String(), `"plaintext":"e30"`) {
 				t.Fatal("HTTP roundtrip failed")
@@ -64,12 +68,12 @@ func TestHTTPAuthenticationStrictRequestsAndRoundTrip(t *testing.T) {
 	}
 }
 func TestHTTPNoGenericSurfaceAndBoundedSlots(t *testing.T) {
-	v, _, _ := testVault(t)
-	h := NewHandler(v, nil)
+	v, _ := testVault(t)
+	h := NewHandler(v)
 	for _, c := range []struct {
 		method, path string
 		code         int
-	}{{"GET", "/v1/crypto/seal", 405}, {"POST", "/v1/crypto/seal/", 404}, {"GET", "/v1/capabilities?x=1", 400}, {"GET", "/v1/config/agent/changes", 503}, {"OPTIONS", "/v1/capabilities", 405}} {
+	}{{"GET", "/v1/crypto/seal", 405}, {"POST", "/v1/crypto/seal/", 404}, {"GET", "/v1/capabilities?x=1", 400}, {"GET", "/v1/config/agent/changes", 404}, {"OPTIONS", "/v1/capabilities", 405}} {
 		if got := callAPI(h, 65532, v.token(), c.method, c.path, "").Code; got != c.code {
 			t.Fatalf("%s %s: %d", c.method, c.path, got)
 		}
@@ -85,8 +89,8 @@ func TestHTTPNoGenericSurfaceAndBoundedSlots(t *testing.T) {
 }
 
 func TestDiagnosticsAreBoundedAndContainNoCallerData(t *testing.T) {
-	v, _, _ := testVault(t)
-	h := NewHandler(v, nil)
+	v, _ := testVault(t)
+	h := NewHandler(v)
 	for i := 0; i < 200; i++ {
 		callAPI(h, 65532, "private-example", "GET", "/private-example", "")
 	}
@@ -111,29 +115,9 @@ func TestDiagnosticsAreBoundedAndContainNoCallerData(t *testing.T) {
 	}
 }
 
-func TestWatchAdmissionIsIndependentAndSingular(t *testing.T) {
-	v, _, _ := testVault(t)
-	watch := NewWatcher()
-	defer watch.Close()
-	watch.publish(true, true)
-	h := NewHandler(v, watch)
-	h.unary <- struct{}{}
-	h.unary <- struct{}{}
-	if w := callAPI(h, GatewayUID, v.token(), "GET", "/v1/config/agent/changes", ""); w.Code != 200 {
-		t.Fatal("unary saturation blocked watch")
-	}
-	h.watchSlot <- struct{}{}
-	if w := callAPI(h, GatewayUID, v.token(), "GET", "/v1/config/agent/changes", ""); w.Code != 429 {
-		t.Fatal("multiple simultaneous watches admitted")
-	}
-	<-h.watchSlot
-	<-h.unary
-	<-h.unary
-}
-
 func TestCryptoAdmissionBoundsBurstAndRefills(t *testing.T) {
-	v, _, _ := testVault(t)
-	h := NewHandler(v, nil)
+	v, _ := testVault(t)
+	h := NewHandler(v)
 	began := time.Now()
 	admitted := 0
 	for i := 0; i < 100; i++ {

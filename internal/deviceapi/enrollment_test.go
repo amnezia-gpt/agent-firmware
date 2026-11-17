@@ -116,8 +116,8 @@ func TestEnrollmentCodeExpiresAndRejectsUnsafeFiles(t *testing.T) {
 }
 
 func TestEnrollmentCodeRoutes(t *testing.T) {
-	v, _, _ := testVault(t)
-	h := NewHandler(v, nil)
+	v, _ := testVault(t)
+	h := NewHandler(v)
 	if callAPI(h, GatewayUID, v.token(), "GET", "/v1/enrollment/code", "").Code != 404 {
 		t.Fatal("route exists without a code store")
 	}

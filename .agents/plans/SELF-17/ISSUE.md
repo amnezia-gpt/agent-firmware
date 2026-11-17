@@ -27,6 +27,11 @@ repeated.
 - `install`: binary, unit, service start with the existing rollback; release record; workload images pulled by
   digest. No issuer, no code, no profile discovery.
 - Saved state split: the workload release belongs to the device, the backend profile to the enrollment.
+- The root secret is created by `install`, before any domain is known, and its fingerprint is recorded with the
+  device-level state, not with the enrollment. `enroll`, a failed enrollment and `unenroll` never create, replace
+  or remove it. (SELF-16 left it at the first `configure` with the fingerprint in the accepted configuration.)
+- State of an earlier firmware layout is refused by `install` with its own bounded code that names the cause
+  and distinguishes it from current-state and root-secret failures.
 - `enroll --issuer <issuer> [--enrollment-code-stdin | --enrollment-code-file <file>]`: discovery, enrollment
   record, code hold, volumes and containers; waits a bounded time for the workload's enrollment outcome and reports
   it. On failure the prepared resources stay and a retry with a new code reuses them. One domain per device; a
@@ -45,6 +50,9 @@ Identity keys and the statement ([SELF-18](../SELF-18/ISSUE.md)); the device API
 ## Acceptance Criteria
 
 - [ ] `install` succeeds with no network access to any domain and leaves a running service awaiting enrollment.
+- [ ] The root secret exists after `install` alone and is byte-identical after `enroll`, a refused `enroll` and a
+  repeated `install`.
+- [ ] A state directory of an earlier layout is refused with a code that distinguishes it from a damaged secret.
 - [ ] `enroll` with a refused code reports the failure, changes nothing of the manufactured device, and a second
   `enroll` with a valid code succeeds without reinstalling or pulling images again.
 - [ ] The code is never an argument, an environment value or printed, and is cleared after delivery or failure.

@@ -3,7 +3,7 @@
 ## Metadata
 
 - Type: Feature / architecture (parent)
-- Status: Design Pending (direction and contract accepted; children at Intake, no implementation authorized)
+- Status: Implementing (the lifecycle and contracts are accepted; implementation proceeds by child issue)
 - Size / risk: Large / high (installation, identity, key custody and the device API all change)
 - Children: [SELF-15](../SELF-15/ISSUE.md), [SELF-16](../SELF-16/ISSUE.md), [SELF-17](../SELF-17/ISSUE.md),
   [SELF-18](../SELF-18/ISSUE.md), [SELF-19](../SELF-19/ISSUE.md), [SELF-20](../SELF-20/ISSUE.md),
@@ -33,7 +33,7 @@ The firmware implements the lifecycle of [docs/device-lifecycle.md](../../../doc
 
 ## Scope
 
-In scope: the six children. No backward compatibility: nothing is in production, earlier workload contracts and
+In scope: the seven children. No backward compatibility: nothing is in production, earlier workload contracts and
 their migration machinery are removed, test hosts are reinstalled.
 
 Not in scope: other host platforms and architectures, publisher signatures of the image, a specified state
@@ -53,4 +53,4 @@ delivered by the domain, clone detection, an `uninstall` command (deliberately a
 
 ## Next Action
 
-Owner selects children for implementation. SELF-15 has no dependency and can start first.
+SELF-15 is complete. Execute SELF-16 before the release manifest work in SELF-21.

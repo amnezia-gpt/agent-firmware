@@ -46,17 +46,11 @@ func (f hostFirmware) Existing() error {
 	return nil
 }
 
-func (f hostFirmware) Configure() error {
-	if _, err := f.store.Save(f.accepted); err != nil {
+func (f hostFirmware) Configure(ctx context.Context) error {
+	if _, err := saveConfiguration(ctx, f.store, f.accepted); err != nil {
 		return err
 	}
 	return f.store.PersistEngineAddress()
-}
-
-func (f hostFirmware) PrepareAPI(ctx context.Context) (bool, error) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	return prepareAPI(ctx, f.store, false)
 }
 
 func (f hostFirmware) HoldCode(code string) error {

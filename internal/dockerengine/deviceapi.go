@@ -2,7 +2,6 @@ package dockerengine
 
 import (
 	"context"
-	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -75,20 +74,6 @@ func (e *Engine) AnyVolumesExist(parent context.Context, s workload.Stack) (bool
 		return true, nil
 	}
 	return false, nil
-}
-
-func (e *Engine) AgentHome(parent context.Context, s workload.Stack) (string, error) {
-	ctx, cancel := context.WithTimeout(parent, e.callTimeout)
-	defer cancel()
-	name := "af-" + s.Installation + "-agent-home"
-	v, err := e.api.VolumeInspect(ctx, name, client.VolumeInspectOptions{})
-	if err != nil {
-		return "", classify(err)
-	}
-	if v.Volume.Name != name || !owned(v.Volume.Labels, s.Installation, "volume") || v.Volume.Driver != "local" || len(v.Volume.Options) > 0 || !filepath.IsAbs(v.Volume.Mountpoint) || filepath.Clean(v.Volume.Mountpoint) != v.Volume.Mountpoint {
-		return "", workload.ErrConflict
-	}
-	return v.Volume.Mountpoint, nil
 }
 
 func creationUser(s workload.Spec) string {

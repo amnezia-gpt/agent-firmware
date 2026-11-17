@@ -56,4 +56,4 @@ and rejection cases for the statement. The firmware owns this contract and consu
 
 ## Next Action
 
-Close the shared field-level schema before implementing this issue, then continue after SELF-16 and SELF-17.
+Implement the accepted field-level schema after SELF-16 and SELF-17.

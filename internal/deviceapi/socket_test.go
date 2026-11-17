@@ -12,7 +12,7 @@ import (
 )
 
 func TestUnauthorizedSlowBodyCannotHoldConnectionIndefinitely(t *testing.T) {
-	v, _, _ := testVault(t)
+	v, _ := testVault(t)
 	dir, err := os.MkdirTemp("/tmp", "af-api-http-")
 	if err != nil {
 		t.Fatal(err)
@@ -23,7 +23,7 @@ func TestUnauthorizedSlowBodyCannotHoldConnectionIndefinitely(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := &http.Server{Handler: NewHandler(v, nil), ReadHeaderTimeout: 500 * time.Millisecond, ConnContext: func(ctx context.Context, _ net.Conn) context.Context {
+	server := &http.Server{Handler: NewHandler(v), ReadHeaderTimeout: 500 * time.Millisecond, ConnContext: func(ctx context.Context, _ net.Conn) context.Context {
 		return context.WithValue(ctx, peerKey{}, GatewayUID)
 	}}
 	go server.Serve(listener)

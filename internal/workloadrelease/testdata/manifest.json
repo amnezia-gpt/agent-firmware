@@ -4,7 +4,6 @@
   "release": "v0.1.0",
   "source_revision": "1111111111111111111111111111111111111111",
   "platform": "linux/amd64",
-  "workload_contract": "urn:amnezia-gpt:workload-contract:device:v1",
   "images": {
     "openclaw-codex": {
       "repository": "docker.io/amneziavpn/agent-workload-openclaw-codex",

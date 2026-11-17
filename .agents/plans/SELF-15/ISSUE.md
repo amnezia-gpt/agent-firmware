@@ -54,13 +54,13 @@ The first Linux run exposed an existing CLI test fixture that supplied an empty 
 state error. The test now supplies a syntactically valid code and exercises the same assertion. See
 [PLAN.md](PLAN.md) for commands and the validation boundary.
 
-## Known Limitations
+## Known Limitations (review, 2026-11-17)
 
-- `internal/privatefile` is exercised by the configuration, installer and Device API suites. It has no dedicated
-  package tests.
+- `internal/privatefile` and `internal/host` are covered by their callers. Neither package has dedicated tests.
 - Configuration, workloads and Device API use `host.DefaultLayout()` directly for their fixed defaults. Fully
   injecting the host layout across those package boundaries remains follow-up work.
 - Installation records the default Docker socket. The CLI has no engine-address option.
+- [SELF-16](../SELF-16/PLAN.md) repeated the root suite on native Linux amd64 after the storage changes.
 
 ## Next Action
 

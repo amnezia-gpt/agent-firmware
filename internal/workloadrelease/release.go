@@ -11,8 +11,6 @@ import (
 	"github.com/amnezia-gpt/agent-firmware/internal/strictjson"
 )
 
-const Contract = "urn:amnezia-gpt:workload-contract:device:v1"
-const DeviceAPIContract = "urn:amnezia-gpt:workload-contract:device:v2"
 const MaxBytes = 64 * 1024
 
 type Error string
@@ -23,14 +21,12 @@ const (
 	ErrRead     Error = "release_read_failed"
 	ErrTooLarge Error = "release_too_large"
 	ErrInvalid  Error = "invalid_workload_release"
-	ErrContract Error = "unsupported_workload_contract"
 )
 
 type Release struct {
 	Kind           string
 	Version        string
 	SourceRevision string
-	Contract       string
 	Platform       string
 	GatewayImage   string
 	CodexImage     string
@@ -58,7 +54,7 @@ func parse(data []byte) (Release, error) {
 	if json.Unmarshal(data, &selector) != nil {
 		return Release{}, ErrInvalid
 	}
-	names := []string{"schema_version", "kind", "source_revision", "platform", "images", "workload_contract"}
+	names := []string{"schema_version", "kind", "source_revision", "platform", "images"}
 	switch selector.Kind {
 	case "agent-workloads-release":
 		names = append(names, "release")
@@ -69,27 +65,13 @@ func parse(data []byte) (Release, error) {
 	}
 	f, ok := strictjson.Object(data, names...)
 	if !ok {
-		// Classify an otherwise exact v2 object missing only its contract.
-		// Unknown/duplicate members and other missing fields remain invalid.
-		withoutContract := make([]string, 0, len(names)-1)
-		for _, name := range names {
-			if name != "workload_contract" {
-				withoutContract = append(withoutContract, name)
-			}
-		}
-		if fields, valid := strictjson.Object(data, withoutContract...); valid && string(bytes.TrimSpace(fields["schema_version"])) == "2" {
-			return Release{}, ErrContract
-		}
 		return Release{}, ErrInvalid
 	}
 	if string(bytes.TrimSpace(f["schema_version"])) != "2" {
 		return Release{}, ErrInvalid
 	}
 	str := func(name string) string { return strictjson.StringField(f, name) }
-	r := Release{Kind: str("kind"), Version: str("release"), SourceRevision: str("source_revision"), Contract: str("workload_contract"), Platform: str("platform")}
-	if r.Contract != Contract && r.Contract != DeviceAPIContract {
-		return Release{}, ErrContract
-	}
+	r := Release{Kind: str("kind"), Version: str("release"), SourceRevision: str("source_revision"), Platform: str("platform")}
 	if !revisionPattern.MatchString(r.SourceRevision) || r.Platform != "linux/amd64" {
 		return Release{}, ErrInvalid
 	}

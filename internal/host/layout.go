@@ -4,15 +4,13 @@ package host
 import "path/filepath"
 
 const (
-	MaxEngineAddress  = 4096
-	ServiceName       = "agent-firmware.service"
-	AcceptedState     = "accepted.json"
-	EngineState       = "engine-address"
-	OperationJournal  = "operation.json"
-	OperationLock     = "operation.lock"
-	DeviceAPIFloor    = "device-api-required"
-	DeviceAPIDir      = "device-api"
-	WrappedCredential = "key.cred"
+	MaxEngineAddress = 4096
+	ServiceName      = "agent-firmware.service"
+	AcceptedState    = "accepted.json"
+	EngineState      = "engine-address"
+	RootSecret       = "root-secret"
+	OperationJournal = "operation.json"
+	OperationLock    = "operation.lock"
 )
 
 type Layout struct {
@@ -23,16 +21,12 @@ type Layout struct {
 	Runtime         string
 	UpdateDirectory string
 	EngineSocket    string
-	ProcFD          string
 	Parents         []string
 	UID, GID        uint32
 
-	Unit                string
-	DropIns             []string
-	SystemdRuntime      string
-	SystemdCreds        string
-	SystemdCredsPATH    string
-	SystemdCredsWorkDir string
+	Unit           string
+	DropIns        []string
+	SystemdRuntime string
 }
 
 func DefaultLayout() Layout {
@@ -40,21 +34,17 @@ func DefaultLayout() Layout {
 	const runtime = "/run"
 	const runtimeUnits = runtime + "/systemd/system"
 	return Layout{
-		Base:                "/usr/local/lib/agent-firmware",
-		Wrapper:             "/usr/local/bin/agent-firmware",
-		Unit:                filepath.Join(systemUnits, ServiceName),
-		State:               "/var/lib/agent-firmware",
-		Lock:                runtime + "/agent-firmware-install",
-		Runtime:             runtime + "/agent-firmware",
-		UpdateDirectory:     runtime,
-		EngineSocket:        "/var/run/docker.sock",
-		SystemdRuntime:      runtimeUnits,
-		SystemdCreds:        "/usr/bin/systemd-creds",
-		SystemdCredsPATH:    "/usr/sbin:/usr/bin:/sbin:/bin",
-		SystemdCredsWorkDir: "/",
-		ProcFD:              "/proc/self/fd",
-		DropIns:             []string{filepath.Join(systemUnits, ServiceName+".d"), filepath.Join(runtimeUnits, ServiceName+".d")},
-		Parents:             []string{"/usr", "/usr/local", "/usr/local/lib", "/usr/local/bin", "/etc", "/etc/systemd", systemUnits, "/var", "/var/lib", runtime},
+		Base:            "/usr/local/lib/agent-firmware",
+		Wrapper:         "/usr/local/bin/agent-firmware",
+		Unit:            filepath.Join(systemUnits, ServiceName),
+		State:           "/var/lib/agent-firmware",
+		Lock:            runtime + "/agent-firmware-install",
+		Runtime:         runtime + "/agent-firmware",
+		UpdateDirectory: runtime,
+		EngineSocket:    "/var/run/docker.sock",
+		SystemdRuntime:  runtimeUnits,
+		DropIns:         []string{filepath.Join(systemUnits, ServiceName+".d"), filepath.Join(runtimeUnits, ServiceName+".d")},
+		Parents:         []string{"/usr", "/usr/local", "/usr/local/lib", "/usr/local/bin", "/etc", "/etc/systemd", systemUnits, "/var", "/var/lib", runtime},
 	}
 }
 

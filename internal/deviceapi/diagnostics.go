@@ -73,7 +73,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rc.SetWriteDeadline(start.Add(2 * time.Second))
 	out := &statusWriter{ResponseWriter: w}
 	op := "unknown"
-	phase := "unary"
 	switch r.URL.Path {
 	case "/v1/capabilities":
 		op = "capabilities"
@@ -83,9 +82,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		op = "unseal"
 	case "/v1/enrollment/code":
 		op = "enrollment_code"
-	case "/v1/config/agent/changes":
-		op = "changes"
-		phase = "watch"
 	}
 	defer func() {
 		outcome := "success"
@@ -101,7 +97,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case out.status >= 400:
 			outcome = "rejected"
 		}
-		h.diagnostics.record("device_api_request", op, phase, outcome, time.Since(start))
+		h.diagnostics.record("device_api_request", op, "unary", outcome, time.Since(start))
 		if out.status == 401 || out.status == 403 {
 			h.diagnostics.record("device_api_auth", "authenticate", "check", outcome, 0)
 		}

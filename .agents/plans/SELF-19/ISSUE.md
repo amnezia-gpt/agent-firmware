@@ -29,8 +29,8 @@ that stream, the firmware as server. The routes of version 3 are served there an
   code. Error format and admission limits as today.
 - Remove the host listener, runtime API and auth directories, the token, both bind mounts, the peer credential
   check and their engine-side verification. The runtime directory keeps only the one-time code.
-- Workload contract `device:v3` in the stack model; the unit no longer needs the Unix address family for a
-  listener.
+- Read the manifest's Device API version and client service from [SELF-21](../SELF-21/DESIGN.md). The unit no
+  longer needs the Unix address family for a listener.
 - Bounded lifecycle events and counters: connected, reconnecting, unavailable, reconnect count.
 - A revision of the SELF-7 design and trust model, and an update of `docs/device-api.md`.
 

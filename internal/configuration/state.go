@@ -15,23 +15,25 @@ import (
 	"github.com/amnezia-gpt/agent-firmware/internal/host"
 	"github.com/amnezia-gpt/agent-firmware/internal/privatefile"
 	"github.com/amnezia-gpt/agent-firmware/internal/strictjson"
-	"github.com/amnezia-gpt/agent-firmware/internal/workloadrelease"
 )
 
 const MaxStateBytes = 132 * 1024
 
 // Store operates in a caller-selected private directory. CLI callers must be root.
 type Store struct {
-	Path          string
-	beforeRename  func() error
-	syncDirectory func(*os.File) error
+	Path string
+	// BootstrapCheck checks for retained external state before first publication.
+	BootstrapCheck func(*Session, *Input) error
+	beforeRename   func() error
+	syncDirectory  func(*os.File) error
 }
 
 type record struct {
-	SchemaVersion int    `json:"schema_version"`
-	Generation    string `json:"generation"`
-	Profile       []byte `json:"backend_profile"`
-	Release       []byte `json:"workload_release"`
+	SchemaVersion   int    `json:"schema_version"`
+	Generation      string `json:"generation"`
+	Profile         []byte `json:"backend_profile"`
+	Release         []byte `json:"workload_release"`
+	RootFingerprint string `json:"root_secret_sha256"`
 }
 
 func (s Store) root(create bool) (*os.Root, error) {
@@ -104,8 +106,8 @@ func load(root *os.Root) (*Input, error) {
 	if len(data) > MaxStateBytes {
 		return nil, ErrCorrupt
 	}
-	fields, ok := strictjson.Object(data, "schema_version", "generation", "backend_profile", "workload_release")
-	if !ok || string(bytes.TrimSpace(fields["schema_version"])) != "1" {
+	fields, ok := strictjson.Object(data, "schema_version", "generation", "backend_profile", "workload_release", "root_secret_sha256")
+	if !ok || string(bytes.TrimSpace(fields["schema_version"])) != "2" {
 		return nil, ErrCorrupt
 	}
 	var stored record
@@ -116,6 +118,12 @@ func load(root *os.Root) (*Input, error) {
 	if err != nil || input.Generation() != stored.Generation {
 		return nil, ErrCorrupt
 	}
+	secret, err := checkedRootSecret(root, stored.RootFingerprint)
+	if err != nil {
+		return nil, err
+	}
+	clear(secret)
+	input.rootFingerprint = stored.RootFingerprint
 	return input, nil
 }
 
@@ -145,34 +153,40 @@ func (s Store) Save(input *Input) (bool, error) {
 		return false, err
 	}
 	defer lock.Close()
-	if pending, err := (&Session{store: s, root: root}).Read(); err != nil {
+	session := &Session{store: s, root: root}
+	if pending, err := session.Read(); err != nil {
 		return false, err
 	} else if len(pending) > 0 {
 		return false, ErrPending
-	}
-	required, e := apiRequired(root)
-	if e != nil {
-		return false, e
-	}
-	if required && input.release.Contract != workloadrelease.DeviceAPIContract {
-		return false, ErrContractDowngrade
 	}
 	old, err := load(root)
 	if err != nil && !errors.Is(err, ErrMissing) {
 		return false, err
 	}
+	var fingerprint string
 	if old != nil {
-		if old.release.Contract == workloadrelease.DeviceAPIContract && input.release.Contract != workloadrelease.DeviceAPIContract {
-			return false, ErrContractDowngrade
-		}
 		if old.profile.ID != input.profile.ID || old.profile.AuthIssuer != input.profile.AuthIssuer {
 			return false, ErrIdentityConflict
 		}
 		if old.generation == input.generation {
 			return false, s.synchronize(root)
 		}
+		fingerprint = old.rootFingerprint
+	} else {
+		if s.BootstrapCheck != nil {
+			if err := s.BootstrapCheck(session, input); err != nil {
+				return false, err
+			}
+		}
+		fingerprint, err = initializeRootSecret(root)
+		if err != nil {
+			return false, err
+		}
 	}
-	data, err := json.Marshal(record{1, input.generation, input.profileBytes, input.releaseBytes})
+	data, err := json.Marshal(record{
+		SchemaVersion: 2, Generation: input.generation, Profile: input.profileBytes,
+		Release: input.releaseBytes, RootFingerprint: fingerprint,
+	})
 	if err != nil {
 		return false, ErrWrite
 	}

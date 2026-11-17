@@ -2,6 +2,7 @@ package deviceapi
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log"
 	"net"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/amnezia-gpt/agent-firmware/internal/host"
@@ -19,7 +21,6 @@ import (
 // because Gateway binds directories rather than a replaceable socket inode.
 type Runtime struct {
 	Vault    *Vault
-	Watch    *Watcher
 	Codes    *CodeStore
 	server   *http.Server
 	listener net.Listener
@@ -29,11 +30,11 @@ type Runtime struct {
 	Events   <-chan Event
 }
 
-func Start(stateDir, installation string, key []byte) (*Runtime, error) {
+func Start(installation string, key []byte) (*Runtime, error) {
 	if os.Geteuid() != 0 || !installationPattern.MatchString(installation) {
 		return nil, ErrKeystore
 	}
-	return startAt(stateDir, host.DefaultLayout().InstallationRuntime(installation), installation, key)
+	return startAt(host.DefaultLayout().InstallationRuntime(installation), installation, key)
 }
 func ensureDir(path string, mode os.FileMode, uid, gid int) error {
 	if err := os.Mkdir(path, mode); err == nil {
@@ -50,8 +51,8 @@ func ensureDir(path string, mode os.FileMode, uid, gid int) error {
 	}
 	return nil
 }
-func startAt(stateDir, base, installation string, key []byte) (*Runtime, error) {
-	v, err := OpenVault(stateDir, installation, key)
+func startAt(base, installation string, key []byte) (*Runtime, error) {
+	v, err := NewVault(installation, key)
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +86,12 @@ func startAt(stateDir, base, installation string, key []byte) (*Runtime, error) 
 	if !ok || owner.UID != GatewayUID || owner.GID != GatewayUID || links != 1 {
 		return nil, ErrKeystore
 	}
-	token, err := os.ReadFile(tokenPath)
+	tokenFile, err := privatefile.OpenRegular(nil, tokenPath, os.O_RDONLY, 0400, owner, false)
+	if err != nil {
+		return nil, ErrKeystore
+	}
+	token, err := io.ReadAll(io.LimitReader(tokenFile, int64(len(v.token())+1)))
+	_ = tokenFile.Close()
 	if err != nil || string(token) != v.token() {
 		return nil, ErrKeystore
 	}
@@ -95,7 +101,14 @@ func startAt(stateDir, base, installation string, key []byte) (*Runtime, error) 
 		if old.Mode()&os.ModeSocket == 0 || !ok || owner.UID != 0 || owner.GID != GatewayUID || old.Mode().Perm() != 0660 {
 			return nil, ErrKeystore
 		}
-		if os.Remove(path) != nil {
+		// A second serve process must never replace a live socket. The
+		// configuration session serializes starts before the listener is bound.
+		connection, err := net.DialTimeout("unix", path, time.Second)
+		if err == nil {
+			_ = connection.Close()
+			return nil, ErrKeystore
+		}
+		if !errors.Is(err, syscall.ECONNREFUSED) || os.Remove(path) != nil {
 			return nil, ErrKeystore
 		}
 	} else if !os.IsNotExist(err) {
@@ -116,9 +129,7 @@ func startAt(stateDir, base, installation string, key []byte) (*Runtime, error) 
 		listener.Close()
 		return nil, ErrKeystore
 	}
-	watch := NewWatcher()
-	handler := NewHandler(v, watch)
-	watch.diagnostics = handler.diagnostics
+	handler := NewHandler(v)
 	handler.enrollment = &CodeStore{dir: base, now: time.Now}
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 500 * time.Millisecond, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8 * 1024, ErrorLog: log.New(io.Discard, "", 0), ConnContext: func(ctx context.Context, c net.Conn) context.Context {
 		uid, err := peerUID(c)
@@ -127,7 +138,7 @@ func startAt(stateDir, base, installation string, key []byte) (*Runtime, error) 
 		}
 		return context.WithValue(ctx, peerKey{}, uid)
 	}}
-	rt := &Runtime{Vault: v, Watch: watch, Codes: handler.enrollment, server: server, listener: listener, socket: path, inode: inode, done: make(chan struct{}), Events: handler.diagnostics.events}
+	rt := &Runtime{Vault: v, Codes: handler.enrollment, server: server, listener: listener, socket: path, inode: inode, done: make(chan struct{}), Events: handler.diagnostics.events}
 	handler.diagnostics.record("device_api_request", "keystore", "start", "ready", 0)
 	// Limit accepted connections before HTTP creates a goroutine for each one.
 	bounded := &boundedListener{Listener: listener, slots: make(chan struct{}, 16), done: make(chan struct{})}
@@ -137,11 +148,9 @@ func startAt(stateDir, base, installation string, key []byte) (*Runtime, error) 
 	return rt, nil
 }
 func (r *Runtime) Close() error {
-	r.Watch.Close()
+	r.Vault.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	vaultClosed := make(chan error, 1)
-	go func() { vaultClosed <- r.Vault.Close() }()
 	err := r.server.Shutdown(ctx)
 	if err != nil {
 		r.server.Close()
@@ -151,40 +160,7 @@ func (r *Runtime) Close() error {
 	if info, e := os.Lstat(r.socket); e == nil && os.SameFile(info, r.inode) {
 		os.Remove(r.socket)
 	}
-	if <-vaultClosed != nil {
-		return ErrKeystore
-	}
 	return err
-}
-
-// LoadCredential reads only the systemd-decrypted, root-owned credential file.
-func LoadCredential(directory string) ([]byte, error) {
-	if !filepath.IsAbs(directory) || filepath.Clean(directory) != directory {
-		return nil, ErrKeystore
-	}
-	r, err := os.OpenRoot(directory)
-	if err != nil {
-		return nil, ErrKeystore
-	}
-	defer r.Close()
-	f, err := privatefile.Open(r, "device-api-key", os.O_RDONLY, 0)
-	if err != nil {
-		return nil, ErrKeystore
-	}
-	defer f.Close()
-	i, err := f.Stat()
-	if err != nil || !i.Mode().IsRegular() || i.Mode().Perm()&0077 != 0 {
-		return nil, ErrKeystore
-	}
-	owner, links, ok := privatefile.Ownership(i)
-	if !ok || owner.UID != 0 || links != 1 {
-		return nil, ErrKeystore
-	}
-	b, err := io.ReadAll(io.LimitReader(f, 33))
-	if err != nil || len(b) != 32 {
-		return nil, ErrKeystore
-	}
-	return b, nil
 }
 
 type boundedListener struct {

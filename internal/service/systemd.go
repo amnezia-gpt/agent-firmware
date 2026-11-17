@@ -21,14 +21,6 @@ func (s Systemd) Available() bool {
 	return err == nil && info.IsDir()
 }
 
-func (s Systemd) credential() string {
-	return "LoadCredentialEncrypted=device-api-key:" + filepath.Join(s.Layout.State, host.DeviceAPIDir, host.WrappedCredential)
-}
-
-func (s Systemd) SupportsDeviceAPI(definition []byte) bool {
-	return hasLine(definition, s.credential())
-}
-
 func (Systemd) Owns(definition []byte) bool { return hasLine(definition, UnitMarker) }
 
 func hasLine(data []byte, line string) bool {
@@ -81,13 +73,8 @@ func (Systemd) Fragment(ctx context.Context) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
-// Definition builds the systemd unit. The device API credential is loaded
-// only for a release that uses the local device API.
-func (s Systemd) Definition(api bool) []byte {
-	load := ""
-	if api {
-		load = s.credential() + "\n"
-	}
+// Definition builds the systemd unit.
+func (s Systemd) Definition() []byte {
 	return []byte(UnitMarker + `
 [Unit]
 Description=Agent firmware host supervisor
@@ -102,7 +89,7 @@ Type=notify
 NotifyAccess=main
 User=root
 Group=root
-` + load + `ExecStart=` + s.Layout.Wrapper + ` serve
+ExecStart=` + s.Layout.Wrapper + ` serve
 UMask=0077
 Restart=on-failure
 RestartSec=5s
