@@ -1,0 +1,99 @@
+{
+ "description": "Public test vectors for device API v3. They contain no private key. The signing and key agreement vectors use keys published in RFC 7515 Appendix A.3 and RFC 7518 Appendix C; a test that needs the matching private keys takes them from those appendices. Statement vectors were signed with keys generated once and discarded; verify them with the key in the header at verification_time.",
+ "thumbprint": {
+  "jwk": {
+   "crv": "P-256",
+   "kty": "EC",
+   "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+   "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+  },
+  "canonical_input": "{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU\",\"y\":\"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0\"}",
+  "thumbprint": "oKIywvGUpTVTyxMQ3bwIIeQUudfr_CkLMjCE19ECD-U"
+ },
+ "sign": {
+  "source": "RFC 7515 Appendix A.3",
+  "public_jwk": {
+   "crv": "P-256",
+   "kty": "EC",
+   "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+   "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"
+  },
+  "request": {
+   "algorithm": "ES256",
+   "input": "ZXlKaGJHY2lPaUpGVXpJMU5pSjkuZXlKcGMzTWlPaUpxYjJVaUxBMEtJQ0psZUhBaU9qRXpNREE0TVRrek9EQXNEUW9nSW1oMGRIQTZMeTlsZUdGdGNHeGxMbU52YlM5cGMxOXliMjkwSWpwMGNuVmxmUQ"
+  },
+  "response_example": {
+   "signature": "DtEhU3ljbEg8L38VWAfUAqOyKAM6-Xx-F4GawxaepmXFCgfTjDxw5djxLa8ISlSApmWQxfKTUJqPP3-Kg6NU1Q"
+  }
+ },
+ "derive": {
+  "source": "RFC 7518 Appendix C (the device holds Bob's key, the peer is Alice's ephemeral key)",
+  "device_public_jwk": {
+   "crv": "P-256",
+   "kty": "EC",
+   "x": "weNJy2HscCSM6AEDTDg04biOvhFhyyWvOHQfeF_PxMQ",
+   "y": "e8lnCO-AlStT-NJVX-crhB7QRYhiix03illJOVAOyck"
+  },
+  "request": {
+   "algorithm": "ECDH",
+   "peer_public_key": {
+    "crv": "P-256",
+    "kty": "EC",
+    "x": "gI0GAILBdu7T53akrFmMyGcsF3n5dO7MmwNBHKW5SV0",
+    "y": "SLW_xSffzlPWrHEVI30DHM_4egVwt3NQqeUD7nMFpps"
+   }
+  },
+  "response": {
+   "shared_secret": "nlbZHYFxNdNyg0KDv4QmnPsxbqPagGpI9tqneYz-kMQ"
+  }
+ },
+ "statement": {
+  "idevid_public_jwk": {
+   "crv": "P-256",
+   "kty": "EC",
+   "x": "ifu7My3IwGX2CunArcyky2BMMwiHdqjGlWGKOTgXx_o",
+   "y": "Nka1GRErD_IbRh0YMyGJZJym_DnZtre3v3ojeFgy1pg"
+  },
+  "idevid_thumbprint": "Zrzhd7GaUZE6YLaJeatzRpYPc2J5UBIP6G-XypCRVgM",
+  "issuer": "https://auth.example",
+  "reject": [
+   {
+    "reason": "signature does not verify",
+    "statement": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImlmdTdNeTNJd0dYMkN1bkFyY3lreTJCTU13aUhkcWpHbFdHS09UZ1h4X28iLCJ5IjoiTmthMUdSRXJEX0liUmgwWU15R0paSnltX0RuWnRyZTN2M29qZUZneTFwZyJ9LCJ0eXAiOiJkZXZpY2UtaWRlbnRpdHkrand0In0.eyJhdWQiOiJodHRwczovL2F1dGguZXhhbXBsZSIsImNuZiI6eyJqa3QiOiJmVkZPM0NsTGpXSkRfQjZpdHJhMnVJbnlZUXlTMXJXXzhrbVNacGZCOTZBIn0sImV4cCI6MTc2MzM3MzkwMCwiaWF0IjoxNzYzMzczNjAwLCJpc3MiOiJacnpoZDdHYVVaRTZZTGFKZWF0elJwWVBjMko1VUJJUDZHLVh5cENSVmdNIiwianRpIjoiZEdWemRDMTJaV04wYjNJdGFuUnBMVEF3TURFIiwic3ViIjoiWnJ6aGQ3R2FVWkU2WUxhSmVhdHpScFlQYzJKNVVCSVA2Ry1YeXBDUlZnTSJ9.ezzeZafyZKsnlQO0eiRUqOIV0bi2IY8Pxt73phecIAporSvCuPrzJQuHcSxFhKMZ2VovzhB5TpSXD2zGdldpiB"
+   },
+   {
+    "reason": "typ is not device-identity+jwt",
+    "statement": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImlmdTdNeTNJd0dYMkN1bkFyY3lreTJCTU13aUhkcWpHbFdHS09UZ1h4X28iLCJ5IjoiTmthMUdSRXJEX0liUmgwWU15R0paSnltX0RuWnRyZTN2M29qZUZneTFwZyJ9LCJ0eXAiOiJKV1QifQ.eyJhdWQiOiJodHRwczovL2F1dGguZXhhbXBsZSIsImNuZiI6eyJqa3QiOiJmVkZPM0NsTGpXSkRfQjZpdHJhMnVJbnlZUXlTMXJXXzhrbVNacGZCOTZBIn0sImV4cCI6MTc2MzM3MzkwMCwiaWF0IjoxNzYzMzczNjAwLCJpc3MiOiJacnpoZDdHYVVaRTZZTGFKZWF0elJwWVBjMko1VUJJUDZHLVh5cENSVmdNIiwianRpIjoiZEdWemRDMTJaV04wYjNJdGFuUnBMVEF3TURFIiwic3ViIjoiWnJ6aGQ3R2FVWkU2WUxhSmVhdHpScFlQYzJKNVVCSVA2Ry1YeXBDUlZnTSJ9.s4kEceCkSeEciJWyoubgdCHj7j4hyBaxb0-26IeEhcNl_wv_b31g_N0-C5Pt72xhu52KqoLYglci-KSjEBwZXQ"
+   },
+   {
+    "reason": "aud is another issuer",
+    "statement": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImlmdTdNeTNJd0dYMkN1bkFyY3lreTJCTU13aUhkcWpHbFdHS09UZ1h4X28iLCJ5IjoiTmthMUdSRXJEX0liUmgwWU15R0paSnltX0RuWnRyZTN2M29qZUZneTFwZyJ9LCJ0eXAiOiJkZXZpY2UtaWRlbnRpdHkrand0In0.eyJhdWQiOiJodHRwczovL290aGVyLmV4YW1wbGUiLCJjbmYiOnsiamt0IjoiZlZGTzNDbExqV0pEX0I2aXRyYTJ1SW55WVF5UzFyV184a21TWnBmQjk2QSJ9LCJleHAiOjE3NjMzNzM5MDAsImlhdCI6MTc2MzM3MzYwMCwiaXNzIjoiWnJ6aGQ3R2FVWkU2WUxhSmVhdHpScFlQYzJKNVVCSVA2Ry1YeXBDUlZnTSIsImp0aSI6ImRHVnpkQzEyWldOMGIzSXRhblJwTFRBd01ERSIsInN1YiI6IlpyemhkN0dhVVpFNllMYUplYXR6UnBZUGMySjVVQklQNkctWHlwQ1JWZ00ifQ.WDWvF4WPXAmI_cjwtA8YwbeRPURB0thdUiPNbrdGsHTHBCyQ6uLTvTymwYsgIFRYhN6kX5smHgvA9qVqW9QE6w"
+   },
+   {
+    "reason": "cnf.jkt names another key than the registered one",
+    "statement": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImlmdTdNeTNJd0dYMkN1bkFyY3lreTJCTU13aUhkcWpHbFdHS09UZ1h4X28iLCJ5IjoiTmthMUdSRXJEX0liUmgwWU15R0paSnltX0RuWnRyZTN2M29qZUZneTFwZyJ9LCJ0eXAiOiJkZXZpY2UtaWRlbnRpdHkrand0In0.eyJhdWQiOiJodHRwczovL2F1dGguZXhhbXBsZSIsImNuZiI6eyJqa3QiOiJtQVJMbkpha3JXTVRHRFpNcThMNl9XWkJaNENidm5naWM4QjFIQVNTdFBZIn0sImV4cCI6MTc2MzM3MzkwMCwiaWF0IjoxNzYzMzczNjAwLCJpc3MiOiJacnpoZDdHYVVaRTZZTGFKZWF0elJwWVBjMko1VUJJUDZHLVh5cENSVmdNIiwianRpIjoiZEdWemRDMTJaV04wYjNJdGFuUnBMVEF3TURFIiwic3ViIjoiWnJ6aGQ3R2FVWkU2WUxhSmVhdHpScFlQYzJKNVVCSVA2Ry1YeXBDUlZnTSJ9.F8v7JRvYB8ycjXzqPMxjMJPY5reX8Se3l0M2OrCX0ry9k-81IajBu7_beOU-UuplOk3xPS3Edk8hsjuiiNFu3w"
+   },
+   {
+    "reason": "expired at verification_time",
+    "statement": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImlmdTdNeTNJd0dYMkN1bkFyY3lreTJCTU13aUhkcWpHbFdHS09UZ1h4X28iLCJ5IjoiTmthMUdSRXJEX0liUmgwWU15R0paSnltX0RuWnRyZTN2M29qZUZneTFwZyJ9LCJ0eXAiOiJkZXZpY2UtaWRlbnRpdHkrand0In0.eyJhdWQiOiJodHRwczovL2F1dGguZXhhbXBsZSIsImNuZiI6eyJqa3QiOiJmVkZPM0NsTGpXSkRfQjZpdHJhMnVJbnlZUXlTMXJXXzhrbVNacGZCOTZBIn0sImV4cCI6MTc2MzM3MzYzMCwiaWF0IjoxNzYzMzczNjAwLCJpc3MiOiJacnpoZDdHYVVaRTZZTGFKZWF0elJwWVBjMko1VUJJUDZHLVh5cENSVmdNIiwianRpIjoiZEdWemRDMTJaV04wYjNJdGFuUnBMVEF3TURFIiwic3ViIjoiWnJ6aGQ3R2FVWkU2WUxhSmVhdHpScFlQYzJKNVVCSVA2Ry1YeXBDUlZnTSJ9.tovGnb7juKmKli1dUt8Y_7plFHLe2-uWPx0eWOJt4Lno_75Sc2BTXoP8_FmH4CivdpJmdb-4edABUOG_tBufYg"
+   },
+   {
+    "reason": "lifetime longer than 300 seconds",
+    "statement": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImlmdTdNeTNJd0dYMkN1bkFyY3lreTJCTU13aUhkcWpHbFdHS09UZ1h4X28iLCJ5IjoiTmthMUdSRXJEX0liUmgwWU15R0paSnltX0RuWnRyZTN2M29qZUZneTFwZyJ9LCJ0eXAiOiJkZXZpY2UtaWRlbnRpdHkrand0In0.eyJhdWQiOiJodHRwczovL2F1dGguZXhhbXBsZSIsImNuZiI6eyJqa3QiOiJmVkZPM0NsTGpXSkRfQjZpdHJhMnVJbnlZUXlTMXJXXzhrbVNacGZCOTZBIn0sImV4cCI6MTc2MzM3NzIwMCwiaWF0IjoxNzYzMzczNjAwLCJpc3MiOiJacnpoZDdHYVVaRTZZTGFKZWF0elJwWVBjMko1VUJJUDZHLVh5cENSVmdNIiwianRpIjoiZEdWemRDMTJaV04wYjNJdGFuUnBMVEF3TURFIiwic3ViIjoiWnJ6aGQ3R2FVWkU2WUxhSmVhdHpScFlQYzJKNVVCSVA2Ry1YeXBDUlZnTSJ9.H-gAj1Ls4Dm7rzJsY6kshhnF9siWsyROtcQaI7LqOdTFE4XcGYGk1frPPBC7kVZEbqSs8LnJvREnqxkPI86InA"
+   },
+   {
+    "reason": "signed by a key other than the header jwk",
+    "statement": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImlmdTdNeTNJd0dYMkN1bkFyY3lreTJCTU13aUhkcWpHbFdHS09UZ1h4X28iLCJ5IjoiTmthMUdSRXJEX0liUmgwWU15R0paSnltX0RuWnRyZTN2M29qZUZneTFwZyJ9LCJ0eXAiOiJkZXZpY2UtaWRlbnRpdHkrand0In0.eyJhdWQiOiJodHRwczovL2F1dGguZXhhbXBsZSIsImNuZiI6eyJqa3QiOiJmVkZPM0NsTGpXSkRfQjZpdHJhMnVJbnlZUXlTMXJXXzhrbVNacGZCOTZBIn0sImV4cCI6MTc2MzM3MzkwMCwiaWF0IjoxNzYzMzczNjAwLCJpc3MiOiJacnpoZDdHYVVaRTZZTGFKZWF0elJwWVBjMko1VUJJUDZHLVh5cENSVmdNIiwianRpIjoiZEdWemRDMTJaV04wYjNJdGFuUnBMVEF3TURFIiwic3ViIjoiWnJ6aGQ3R2FVWkU2WUxhSmVhdHpScFlQYzJKNVVCSVA2Ry1YeXBDUlZnTSJ9.Rngs69-nVUFklSEdZIUGcFPCbGu2QiyC5jeRZfiHs2lX6UbmHnnyMR7sNN8JLbcCZbhUKJ0g0I6W023_N-tgEQ"
+   }
+  ],
+  "signing_public_jwk": {
+   "crv": "P-256",
+   "kty": "EC",
+   "x": "lsP1s9z0n7pWZgc_S-BS9Lvj9TDt2pq2DnUxmHdgpKU",
+   "y": "5VjMqaqxFJNyqbZiTDZMXnnBcgs38pWsthlFhU5xlCE"
+  },
+  "signing_thumbprint": "fVFO3ClLjWJD_B6itra2uInyYQyS1rW_8kmSZpfB96A",
+  "valid": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImlmdTdNeTNJd0dYMkN1bkFyY3lreTJCTU13aUhkcWpHbFdHS09UZ1h4X28iLCJ5IjoiTmthMUdSRXJEX0liUmgwWU15R0paSnltX0RuWnRyZTN2M29qZUZneTFwZyJ9LCJ0eXAiOiJkZXZpY2UtaWRlbnRpdHkrand0In0.eyJhdWQiOiJodHRwczovL2F1dGguZXhhbXBsZSIsImNuZiI6eyJqa3QiOiJmVkZPM0NsTGpXSkRfQjZpdHJhMnVJbnlZUXlTMXJXXzhrbVNacGZCOTZBIn0sImV4cCI6MTc2MzM3MzkwMCwiaWF0IjoxNzYzMzczNjAwLCJpc3MiOiJacnpoZDdHYVVaRTZZTGFKZWF0elJwWVBjMko1VUJJUDZHLVh5cENSVmdNIiwianRpIjoiZEdWemRDMTJaV04wYjNJdGFuUnBMVEF3TURFIiwic3ViIjoiWnJ6aGQ3R2FVWkU2WUxhSmVhdHpScFlQYzJKNVVCSVA2Ry1YeXBDUlZnTSJ9.ezzeZafyZKsnlQO0eiRUqOIV0bi2IY8Pxt73phecIAporSvCuPrzJQuHcSxFhKMZ2VovzhB5TpSXD2zGdldpiA",
+  "verification_time": 1763373660
+ }
+}

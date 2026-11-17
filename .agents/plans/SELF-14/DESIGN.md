@@ -20,6 +20,9 @@ maps them onto this repository. Everything under "Target" is accepted direction,
     initialization command are removed.
 11. Standard library cryptography only (see "Cryptography").
 12. The device API is version 3, matching workload contract `device:v3`.
+13. The firmware carries no knowledge of what a workload does. The device API offers device services only
+    (identity, key operations, sealing, the enrollment code). The agent configuration watch is removed: it made
+    the firmware read a workload's data and follow an agent's configuration format.
 
 ## Commands
 
@@ -75,6 +78,8 @@ enrollment.
 - Host Unix listener, capability token file, bind mounts into the workload, kernel peer credential check.
 - The workload identity volume and key generation in the workload.
 - Durable seal invocation counter and its lock.
+- The agent configuration watch: its route, service identifier, inotify reader and the lookup of the workload
+  volume's host path.
 
 ## Device API v3
 
@@ -92,6 +97,25 @@ engine API, which the firmware alone uses. Error format and admission limits sta
 | `POST /v3/keys/encryption/derive` | raw ECDH shared secret for a given peer public key | new |
 | `POST /v3/crypto/seal`, `/unseal` | encryption of workload records | as today |
 | `GET`, `DELETE /v3/enrollment/code` | one-time code hand-over | as today |
+
+Field-level contract: [device-api-v3.openapi.json](device-api-v3.openapi.json) (proposed, draft 1) with public test
+vectors in [device-api-v3.vectors.json](device-api-v3.vectors.json). The firmware owns this contract; consumers
+copy it with its source noted. What the schema fixes beyond the table:
+
+- Public keys are JWKs with exactly `kty`, `crv`, `x`, `y`; every key comes with its RFC 7638 thumbprint.
+- `sign`: `{"algorithm":"ES256","input":<base64url, 1..8192 bytes>}` returns `{"signature":<64 bytes R||S>}`,
+  directly usable as a JWS signature.
+- `derive`: `{"algorithm":"ECDH","peer_public_key":<JWK>}` returns `{"shared_secret":<32 bytes>}`.
+- All binary values are canonical unpadded base64url with fixed widths where the size is fixed.
+- Sealed records use the envelope prefix `afseal2.`; `key_rotation_required`, `unauthorized` and `forbidden` no
+  longer exist; credential protection reports `software` and no key ID.
+- Identifiers of the device API use the neutral namespace `urn:agent-firmware:` (owner, 2026-11-17): the protocol
+  `urn:agent-firmware:device-api:v3`, the services (`device-identity`, `signing`, `key-agreement`,
+  `credential-seal`, `enrollment-code`). The workload contract
+  identifier in the release manifest belongs to the workloads repository and is not renamed here.
+- The vectors hold no private key: signing and key agreement use the keys published in RFC 7515 Appendix A.3 and
+  RFC 7518 Appendix C (both recomputed when the file was built), statement vectors were signed with discarded keys
+  and include seven rejection cases.
 
 - Operations are raw key operations, as in key management services. The firmware builds no assertion and parses
   no encrypted envelope; the workload assembles and opens them.
@@ -148,8 +172,6 @@ shows the new command. The joint release and one real-host check close the featu
 
 ## Open
 
-- **Agent configuration watch.** The service has no caller and the workload polls on its own. It does not depend
-  on the transport and keeps working over the stream. Removing it is a separate contract decision.
 - **Operational key rotation.** Not designed.
 - **Long-lived exec stream.** Unproven: a day-long session with HTTP/2 PING, recovery after a workload restart,
   and no accumulation of finished exec instances must be shown before SELF-19 is planned in detail.

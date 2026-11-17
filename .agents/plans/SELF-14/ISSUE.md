@@ -48,7 +48,6 @@ delivered by the domain, clone detection, an `uninstall` command (deliberately a
 
 ## Open Decisions
 
-- Fate of the agent configuration watch service (it has no caller); see DESIGN.md.
 - Rotation of the operational keys (not part of this feature).
 
 ## Next Action

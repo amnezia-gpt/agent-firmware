@@ -41,7 +41,7 @@ finished exec instances do not accumulate under frequent reconnects.
 
 ## Not In Scope
 
-The workload side of the contract (its own repository); the agent configuration watch decision.
+The workload side of the contract (its own repository).
 
 ## Acceptance Criteria
 

@@ -1,0 +1,1051 @@
+{
+ "openapi": "3.1.0",
+ "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
+ "info": {
+  "title": "Firmware device services API v3 (PROPOSED)",
+  "version": "3.0.0-draft.1",
+  "description": "SELF-14 draft. HTTP/2 JSON on a stream the firmware opens into the workload container (an exec running the workload's dial-stdio command; HTTP/2 with prior knowledge, no TLS). The firmware is the server and the workload the client. There is no host listener and no access token: only a holder of the container engine API can open the stream. The workload keeps one session; a new one replaces the previous one. Read SELF-14 DESIGN.md for the trust model and lifecycle."
+ },
+ "x-status": "proposed",
+ "servers": [
+  {
+   "url": "http://firmware.local",
+   "description": "Logical HTTP authority only. Requests travel on the established stream; no TCP, DNS, proxy or redirect."
+  }
+ ],
+ "paths": {
+  "/v3/capabilities": {
+   "get": {
+    "operationId": "getCapabilities",
+    "responses": {
+     "200": {
+      "description": "Capabilities",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Capabilities"
+        }
+       }
+      },
+      "headers": {
+       "Cache-Control": {
+        "$ref": "#/components/headers/NoStore"
+       }
+      }
+     },
+     "400": {
+      "$ref": "#/components/responses/Error400"
+     },
+     "404": {
+      "$ref": "#/components/responses/Error404"
+     },
+     "405": {
+      "$ref": "#/components/responses/Error405"
+     },
+     "429": {
+      "$ref": "#/components/responses/Error429"
+     },
+     "500": {
+      "$ref": "#/components/responses/Error500"
+     },
+     "503": {
+      "$ref": "#/components/responses/Error503"
+     },
+     "431": {
+      "$ref": "#/components/responses/HeaderTooLarge"
+     }
+    },
+    "description": "Discovery is bounded. Ignore unknown capability URNs and purpose identifiers; require the services the client uses."
+   }
+  },
+  "/v3/identity": {
+   "get": {
+    "operationId": "getIdentity",
+    "description": "Public keys of the device and a fresh identity statement. The statement's audience is the issuer of the enrollment; the client cannot choose it. Each call issues a new statement valid for 300 seconds. No private key is returned by any route.",
+    "responses": {
+     "200": {
+      "description": "Identity",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Identity"
+        }
+       }
+      },
+      "headers": {
+       "Cache-Control": {
+        "$ref": "#/components/headers/NoStore"
+       }
+      }
+     },
+     "400": {
+      "$ref": "#/components/responses/Error400"
+     },
+     "404": {
+      "$ref": "#/components/responses/Error404"
+     },
+     "405": {
+      "$ref": "#/components/responses/Error405"
+     },
+     "429": {
+      "$ref": "#/components/responses/Error429"
+     },
+     "500": {
+      "$ref": "#/components/responses/Error500"
+     },
+     "503": {
+      "$ref": "#/components/responses/Error503"
+     },
+     "431": {
+      "$ref": "#/components/responses/HeaderTooLarge"
+     }
+    }
+   }
+  },
+  "/v3/keys/signing/sign": {
+   "post": {
+    "operationId": "sign",
+    "description": "ES256 (ECDSA P-256 over SHA-256 of the decoded input) with the operational signing key. A raw key operation: the firmware does not interpret the input. The IDevID key is not reachable through this or any route.",
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/SignRequest"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Signature",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Signature"
+        }
+       }
+      },
+      "headers": {
+       "Cache-Control": {
+        "$ref": "#/components/headers/NoStore"
+       }
+      }
+     },
+     "400": {
+      "$ref": "#/components/responses/Error400"
+     },
+     "404": {
+      "$ref": "#/components/responses/Error404"
+     },
+     "405": {
+      "$ref": "#/components/responses/Error405"
+     },
+     "413": {
+      "$ref": "#/components/responses/Error413"
+     },
+     "415": {
+      "$ref": "#/components/responses/Error415"
+     },
+     "429": {
+      "$ref": "#/components/responses/Error429"
+     },
+     "500": {
+      "$ref": "#/components/responses/Error500"
+     },
+     "503": {
+      "$ref": "#/components/responses/Error503"
+     },
+     "431": {
+      "$ref": "#/components/responses/HeaderTooLarge"
+     }
+    }
+   }
+  },
+  "/v3/keys/encryption/derive": {
+   "post": {
+    "operationId": "deriveSharedSecret",
+    "description": "Raw ECDH (P-256) between the operational encryption key and the peer's public key. Returns the 32-byte shared secret (the X coordinate); the client applies its own key derivation and unwrapping. A peer key that is not a valid point on the curve is invalid_request.",
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/DeriveRequest"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "SharedSecret",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SharedSecret"
+        }
+       }
+      },
+      "headers": {
+       "Cache-Control": {
+        "$ref": "#/components/headers/NoStore"
+       }
+      }
+     },
+     "400": {
+      "$ref": "#/components/responses/Error400"
+     },
+     "404": {
+      "$ref": "#/components/responses/Error404"
+     },
+     "405": {
+      "$ref": "#/components/responses/Error405"
+     },
+     "413": {
+      "$ref": "#/components/responses/Error413"
+     },
+     "415": {
+      "$ref": "#/components/responses/Error415"
+     },
+     "429": {
+      "$ref": "#/components/responses/Error429"
+     },
+     "500": {
+      "$ref": "#/components/responses/Error500"
+     },
+     "503": {
+      "$ref": "#/components/responses/Error503"
+     },
+     "431": {
+      "$ref": "#/components/responses/HeaderTooLarge"
+     }
+    }
+   }
+  },
+  "/v3/crypto/seal": {
+   "post": {
+    "operationId": "sealCredential",
+    "responses": {
+     "200": {
+      "description": "SealedRecord",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SealedRecord"
+        }
+       }
+      },
+      "headers": {
+       "Cache-Control": {
+        "$ref": "#/components/headers/NoStore"
+       }
+      }
+     },
+     "400": {
+      "$ref": "#/components/responses/Error400"
+     },
+     "404": {
+      "$ref": "#/components/responses/Error404"
+     },
+     "405": {
+      "$ref": "#/components/responses/Error405"
+     },
+     "413": {
+      "$ref": "#/components/responses/Error413"
+     },
+     "415": {
+      "$ref": "#/components/responses/Error415"
+     },
+     "429": {
+      "$ref": "#/components/responses/Error429"
+     },
+     "500": {
+      "$ref": "#/components/responses/Error500"
+     },
+     "503": {
+      "$ref": "#/components/responses/Error503"
+     },
+     "431": {
+      "$ref": "#/components/responses/HeaderTooLarge"
+     }
+    },
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/SealRequest"
+       }
+      }
+     }
+    },
+    "description": "Reject a syntactically valid but unadvertised/unauthorized purpose as 400 unsupported_purpose; never create a new namespace implicitly."
+   }
+  },
+  "/v3/crypto/unseal": {
+   "post": {
+    "operationId": "unsealCredential",
+    "responses": {
+     "200": {
+      "description": "PlainRecord",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/PlainRecord"
+        }
+       }
+      },
+      "headers": {
+       "Cache-Control": {
+        "$ref": "#/components/headers/NoStore"
+       }
+      }
+     },
+     "400": {
+      "$ref": "#/components/responses/Error400"
+     },
+     "404": {
+      "$ref": "#/components/responses/Error404"
+     },
+     "405": {
+      "$ref": "#/components/responses/Error405"
+     },
+     "413": {
+      "$ref": "#/components/responses/Error413"
+     },
+     "415": {
+      "$ref": "#/components/responses/Error415"
+     },
+     "429": {
+      "$ref": "#/components/responses/Error429"
+     },
+     "500": {
+      "$ref": "#/components/responses/Error500"
+     },
+     "503": {
+      "$ref": "#/components/responses/Error503"
+     },
+     "422": {
+      "$ref": "#/components/responses/Error422"
+     },
+     "431": {
+      "$ref": "#/components/responses/HeaderTooLarge"
+     }
+    },
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/UnsealRequest"
+       }
+      }
+     }
+    },
+    "description": "Reject a syntactically valid but unadvertised/unauthorized purpose as 400 unsupported_purpose; never create a new namespace implicitly."
+   }
+  },
+  "/v3/enrollment/code": {
+   "get": {
+    "operationId": "getEnrollmentCode",
+    "responses": {
+     "200": {
+      "description": "EnrollmentCode",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/EnrollmentCode"
+        }
+       }
+      },
+      "headers": {
+       "Cache-Control": {
+        "$ref": "#/components/headers/NoStore"
+       }
+      }
+     },
+     "400": {
+      "$ref": "#/components/responses/Error400"
+     },
+     "404": {
+      "$ref": "#/components/responses/Error404"
+     },
+     "405": {
+      "$ref": "#/components/responses/Error405"
+     },
+     "429": {
+      "$ref": "#/components/responses/Error429"
+     },
+     "500": {
+      "$ref": "#/components/responses/Error500"
+     },
+     "431": {
+      "$ref": "#/components/responses/HeaderTooLarge"
+     }
+    },
+    "description": "Present only when the enrollment-code service is advertised. Returns the one-time code held for this installation; 404 not_found means none is held and there is nothing to do. Reading does not spend it. The value is an opaque bearer secret of the control plane: never log, persist or report it."
+   },
+   "delete": {
+    "operationId": "deleteEnrollmentCode",
+    "responses": {
+     "204": {
+      "description": "Removed, or none was held",
+      "headers": {
+       "Cache-Control": {
+        "$ref": "#/components/headers/NoStore"
+       }
+      }
+     },
+     "400": {
+      "$ref": "#/components/responses/Error400"
+     },
+     "404": {
+      "$ref": "#/components/responses/Error404"
+     },
+     "405": {
+      "$ref": "#/components/responses/Error405"
+     },
+     "429": {
+      "$ref": "#/components/responses/Error429"
+     },
+     "500": {
+      "$ref": "#/components/responses/Error500"
+     },
+     "431": {
+      "$ref": "#/components/responses/HeaderTooLarge"
+     }
+    },
+    "description": "Gateway removes the code once the authorization server answered its redemption, success or refusal. Idempotent."
+   }
+  }
+ },
+ "components": {
+  "schemas": {
+   "Capabilities": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "protocol",
+     "capabilities",
+     "credential_protection"
+    ],
+    "properties": {
+     "protocol": {
+      "const": "urn:agent-firmware:device-api:v3"
+     },
+     "capabilities": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {
+       "$ref": "#/components/schemas/CapabilityURN"
+      },
+      "description": "Supported services, including currently unavailable ones. Unknown services are ignored by the client."
+     },
+     "credential_protection": {
+      "$ref": "#/components/schemas/CredentialProtection"
+     }
+    },
+    "example": {
+     "protocol": "urn:agent-firmware:device-api:v3",
+     "capabilities": [
+      "urn:agent-firmware:device-service:device-identity:v1",
+      "urn:agent-firmware:device-service:signing:v1",
+      "urn:agent-firmware:device-service:key-agreement:v1",
+      "urn:agent-firmware:device-service:credential-seal:v1",
+      "urn:agent-firmware:device-service:enrollment-code:v1"
+     ],
+     "credential_protection": {
+      "state": "ready",
+      "protection": "software",
+      "purposes": [
+       "gateway-session",
+       "registration-management",
+       "mcp-oauth"
+      ]
+     }
+    },
+    "description": "Exact fields, open capability identifiers."
+   },
+   "CredentialProtection": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "state",
+     "protection",
+     "purposes"
+    ],
+    "properties": {
+     "state": {
+      "type": "string",
+      "enum": [
+       "ready",
+       "unavailable"
+      ]
+     },
+     "protection": {
+      "type": "string",
+      "enum": [
+       "software"
+      ],
+      "description": "A root secret held in a root-only file. No hardware binding is claimed."
+     },
+     "purposes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {
+       "$ref": "#/components/schemas/Purpose"
+      },
+      "description": "Purposes supported for this enrollment. Initial catalog: gateway-session, registration-management, mcp-oauth."
+     }
+    }
+   },
+   "SealRequest": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "purpose",
+     "record_id",
+     "plaintext"
+    ],
+    "properties": {
+     "purpose": {
+      "$ref": "#/components/schemas/Purpose"
+     },
+     "record_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._:-]{1,128}$",
+      "minLength": 1,
+      "maxLength": 128
+     },
+     "plaintext": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "minLength": 2,
+      "maxLength": 87382,
+      "description": "Canonical unpadded base64url; decoded length must be 1..65536 bytes."
+     }
+    },
+    "example": {
+     "purpose": "gateway-session",
+     "record_id": "default",
+     "plaintext": "e30"
+    }
+   },
+   "SealedRecord": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "sealed"
+    ],
+    "properties": {
+     "sealed": {
+      "type": "string",
+      "pattern": "^afseal2\\.[A-Za-z0-9_-]+$",
+      "minLength": 47,
+      "maxLength": 87427,
+      "description": "Opaque versioned AEAD envelope (12-byte nonce, ciphertext, 16-byte tag). The client stores and returns exact bytes."
+     }
+    },
+    "example": {
+     "sealed": "afseal2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    },
+    "description": "The example has synthetic format-valid bytes, not a valid ciphertext test vector."
+   },
+   "UnsealRequest": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "purpose",
+     "record_id",
+     "sealed"
+    ],
+    "properties": {
+     "purpose": {
+      "$ref": "#/components/schemas/Purpose"
+     },
+     "record_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._:-]{1,128}$",
+      "minLength": 1,
+      "maxLength": 128
+     },
+     "sealed": {
+      "type": "string",
+      "pattern": "^afseal2\\.[A-Za-z0-9_-]+$",
+      "minLength": 47,
+      "maxLength": 87427,
+      "description": "Opaque versioned AEAD envelope (12-byte nonce, ciphertext, 16-byte tag). The client stores and returns exact bytes."
+     }
+    },
+    "example": {
+     "purpose": "gateway-session",
+     "record_id": "default",
+     "sealed": "afseal2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    },
+    "description": "Synthetic example exercises wire shape only; its tag is not valid."
+   },
+   "PlainRecord": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "plaintext"
+    ],
+    "properties": {
+     "plaintext": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "minLength": 2,
+      "maxLength": 87382,
+      "description": "Canonical unpadded base64url; decoded length must be 1..65536 bytes."
+     }
+    },
+    "example": {
+     "plaintext": "e30"
+    }
+   },
+   "Error": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "error"
+    ],
+    "properties": {
+     "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "code",
+       "retryable"
+      ],
+      "properties": {
+       "code": {
+        "type": "string",
+        "enum": [
+         "invalid_request",
+         "not_found",
+         "method_not_allowed",
+         "payload_too_large",
+         "unsupported_media_type",
+         "ciphertext_rejected",
+         "resource_exhausted",
+         "internal_error",
+         "keystore_unavailable",
+         "unsupported_purpose"
+        ]
+       },
+       "retryable": {
+        "type": "boolean"
+       }
+      }
+     }
+    },
+    "example": {
+     "error": {
+      "code": "ciphertext_rejected",
+      "retryable": false
+     }
+    }
+   },
+   "CapabilityURN": {
+    "type": "string",
+    "format": "uri",
+    "pattern": "^urn:[A-Za-z0-9-]+:[^\\s]+$",
+    "minLength": 7,
+    "maxLength": 256,
+    "description": "Open URN namespace. Clients ignore well-formed unknown services, require the subset they use and never treat a new identifier as authorization."
+   },
+   "Purpose": {
+    "type": "string",
+    "pattern": "^[a-z][a-z0-9-]{0,63}$",
+    "minLength": 1,
+    "maxLength": 64,
+    "description": "Extensible identifier. The server accepts only purposes it advertises; syntax alone does not grant access."
+   },
+   "EnrollmentCode": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "code"
+    ],
+    "properties": {
+     "code": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{16,128}$",
+      "description": "Opaque one-time enrollment code. Firmware checks only these outer bounds."
+     }
+    },
+    "example": {
+     "code": "enrc_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    },
+    "description": "The example is a synthetic shape-valid value, not a credential."
+   },
+   "PublicJWK": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "kty",
+     "crv",
+     "x",
+     "y"
+    ],
+    "properties": {
+     "kty": {
+      "const": "EC"
+     },
+     "crv": {
+      "const": "P-256"
+     },
+     "x": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43}$"
+     },
+     "y": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43}$"
+     }
+    },
+    "description": "Public P-256 key with exactly the four required members of RFC 7638, coordinates as fixed-width 32-byte canonical unpadded base64url. The client adds use, alg or kid where a protocol needs them.",
+    "example": {
+     "crv": "P-256",
+     "kty": "EC",
+     "x": "weNJy2HscCSM6AEDTDg04biOvhFhyyWvOHQfeF_PxMQ",
+     "y": "e8lnCO-AlStT-NJVX-crhB7QRYhiix03illJOVAOyck"
+    }
+   },
+   "Thumbprint": {
+    "type": "string",
+    "pattern": "^[A-Za-z0-9_-]{43}$",
+    "description": "RFC 7638 SHA-256 thumbprint of the key, canonical unpadded base64url."
+   },
+   "PublicKey": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "jwk",
+     "thumbprint"
+    ],
+    "properties": {
+     "jwk": {
+      "$ref": "#/components/schemas/PublicJWK"
+     },
+     "thumbprint": {
+      "$ref": "#/components/schemas/Thumbprint"
+     }
+    }
+   },
+   "Identity": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "idevid",
+     "signing_key",
+     "encryption_key",
+     "statement"
+    ],
+    "properties": {
+     "idevid": {
+      "$ref": "#/components/schemas/PublicKey"
+     },
+     "signing_key": {
+      "$ref": "#/components/schemas/PublicKey"
+     },
+     "encryption_key": {
+      "$ref": "#/components/schemas/PublicKey"
+     },
+     "statement": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]{86}$",
+      "maxLength": 2048,
+      "description": "Compact JWS. Header: alg ES256, typ device-identity+jwt, jwk = the IDevID public key. Claims: iss and sub = IDevID thumbprint; aud = issuer of the enrollment; iat; exp = iat + 300; jti (16 random bytes, base64url); cnf.jkt = thumbprint of signing_key. Signed with the IDevID key."
+     }
+    },
+    "example": {
+     "idevid": {
+      "jwk": {
+       "crv": "P-256",
+       "kty": "EC",
+       "x": "ifu7My3IwGX2CunArcyky2BMMwiHdqjGlWGKOTgXx_o",
+       "y": "Nka1GRErD_IbRh0YMyGJZJym_DnZtre3v3ojeFgy1pg"
+      },
+      "thumbprint": "Zrzhd7GaUZE6YLaJeatzRpYPc2J5UBIP6G-XypCRVgM"
+     },
+     "signing_key": {
+      "jwk": {
+       "crv": "P-256",
+       "kty": "EC",
+       "x": "lsP1s9z0n7pWZgc_S-BS9Lvj9TDt2pq2DnUxmHdgpKU",
+       "y": "5VjMqaqxFJNyqbZiTDZMXnnBcgs38pWsthlFhU5xlCE"
+      },
+      "thumbprint": "fVFO3ClLjWJD_B6itra2uInyYQyS1rW_8kmSZpfB96A"
+     },
+     "encryption_key": {
+      "jwk": {
+       "crv": "P-256",
+       "kty": "EC",
+       "x": "weNJy2HscCSM6AEDTDg04biOvhFhyyWvOHQfeF_PxMQ",
+       "y": "e8lnCO-AlStT-NJVX-crhB7QRYhiix03illJOVAOyck"
+      },
+      "thumbprint": "Vy57XrArUrW0NbpI12tEzDHABxMwrTh6HHXRenSpnCo"
+     },
+     "statement": "eyJhbGciOiJFUzI1NiIsImp3ayI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImlmdTdNeTNJd0dYMkN1bkFyY3lreTJCTU13aUhkcWpHbFdHS09UZ1h4X28iLCJ5IjoiTmthMUdSRXJEX0liUmgwWU15R0paSnltX0RuWnRyZTN2M29qZUZneTFwZyJ9LCJ0eXAiOiJkZXZpY2UtaWRlbnRpdHkrand0In0.eyJhdWQiOiJodHRwczovL2F1dGguZXhhbXBsZSIsImNuZiI6eyJqa3QiOiJmVkZPM0NsTGpXSkRfQjZpdHJhMnVJbnlZUXlTMXJXXzhrbVNacGZCOTZBIn0sImV4cCI6MTc2MzM3MzkwMCwiaWF0IjoxNzYzMzczNjAwLCJpc3MiOiJacnpoZDdHYVVaRTZZTGFKZWF0elJwWVBjMko1VUJJUDZHLVh5cENSVmdNIiwianRpIjoiZEdWemRDMTJaV04wYjNJdGFuUnBMVEF3TURFIiwic3ViIjoiWnJ6aGQ3R2FVWkU2WUxhSmVhdHpScFlQYzJKNVVCSVA2Ry1YeXBDUlZnTSJ9.ezzeZafyZKsnlQO0eiRUqOIV0bi2IY8Pxt73phecIAporSvCuPrzJQuHcSxFhKMZ2VovzhB5TpSXD2zGdldpiA"
+    },
+    "description": "The example reuses the public test vectors; the encryption key there is the RFC 7518 Appendix C key."
+   },
+   "SignRequest": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "algorithm",
+     "input"
+    ],
+    "properties": {
+     "algorithm": {
+      "const": "ES256"
+     },
+     "input": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "minLength": 2,
+      "maxLength": 10923,
+      "description": "Canonical unpadded base64url of the bytes to sign; decoded length 1..8192. For a JWS this is the ASCII signing input."
+     }
+    },
+    "example": {
+     "algorithm": "ES256",
+     "input": "ZXlKaGJHY2lPaUpGVXpJMU5pSjkuZXlKcGMzTWlPaUpxYjJVaUxBMEtJQ0psZUhBaU9qRXpNREE0TVRrek9EQXNEUW9nSW1oMGRIQTZMeTlsZUdGdGNHeGxMbU52YlM5cGMxOXliMjkwSWpwMGNuVmxmUQ"
+    }
+   },
+   "Signature": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "signature"
+    ],
+    "properties": {
+     "signature": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{86}$",
+      "description": "R and S as two fixed-width 32-byte big-endian integers, concatenated (RFC 7518 section 3.4), canonical unpadded base64url. Usable directly as a JWS signature. Signatures are randomized: verify, do not compare."
+     }
+    },
+    "example": {
+     "signature": "DtEhU3ljbEg8L38VWAfUAqOyKAM6-Xx-F4GawxaepmXFCgfTjDxw5djxLa8ISlSApmWQxfKTUJqPP3-Kg6NU1Q"
+    }
+   },
+   "DeriveRequest": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "algorithm",
+     "peer_public_key"
+    ],
+    "properties": {
+     "algorithm": {
+      "const": "ECDH"
+     },
+     "peer_public_key": {
+      "$ref": "#/components/schemas/PublicJWK"
+     }
+    },
+    "example": {
+     "algorithm": "ECDH",
+     "peer_public_key": {
+      "crv": "P-256",
+      "kty": "EC",
+      "x": "gI0GAILBdu7T53akrFmMyGcsF3n5dO7MmwNBHKW5SV0",
+      "y": "SLW_xSffzlPWrHEVI30DHM_4egVwt3NQqeUD7nMFpps"
+     }
+    }
+   },
+   "SharedSecret": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "shared_secret"
+    ],
+    "properties": {
+     "shared_secret": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43}$",
+      "description": "32-byte shared secret, canonical unpadded base64url. Sensitive: never log or persist."
+     }
+    },
+    "example": {
+     "shared_secret": "nlbZHYFxNdNyg0KDv4QmnPsxbqPagGpI9tqneYz-kMQ"
+    }
+   }
+  },
+  "responses": {
+   "Error400": {
+    "description": "invalid_request or unsupported_purpose (not retryable)",
+    "content": {
+     "application/json": {
+      "schema": {
+       "$ref": "#/components/schemas/Error"
+      }
+     }
+    },
+    "headers": {
+     "Cache-Control": {
+      "$ref": "#/components/headers/NoStore"
+     }
+    }
+   },
+   "Error404": {
+    "description": "not_found",
+    "content": {
+     "application/json": {
+      "schema": {
+       "$ref": "#/components/schemas/Error"
+      }
+     }
+    },
+    "headers": {
+     "Cache-Control": {
+      "$ref": "#/components/headers/NoStore"
+     }
+    }
+   },
+   "Error405": {
+    "description": "method_not_allowed",
+    "content": {
+     "application/json": {
+      "schema": {
+       "$ref": "#/components/schemas/Error"
+      }
+     }
+    },
+    "headers": {
+     "Cache-Control": {
+      "$ref": "#/components/headers/NoStore"
+     }
+    }
+   },
+   "Error429": {
+    "description": "resource_exhausted",
+    "content": {
+     "application/json": {
+      "schema": {
+       "$ref": "#/components/schemas/Error"
+      }
+     }
+    },
+    "headers": {
+     "Cache-Control": {
+      "$ref": "#/components/headers/NoStore"
+     },
+     "Retry-After": {
+      "$ref": "#/components/headers/RetryAfter"
+     }
+    }
+   },
+   "Error500": {
+    "description": "internal_error",
+    "content": {
+     "application/json": {
+      "schema": {
+       "$ref": "#/components/schemas/Error"
+      }
+     }
+    },
+    "headers": {
+     "Cache-Control": {
+      "$ref": "#/components/headers/NoStore"
+     }
+    }
+   },
+   "Error503": {
+    "description": "service unavailable",
+    "content": {
+     "application/json": {
+      "schema": {
+       "$ref": "#/components/schemas/Error"
+      }
+     }
+    },
+    "headers": {
+     "Cache-Control": {
+      "$ref": "#/components/headers/NoStore"
+     },
+     "Retry-After": {
+      "$ref": "#/components/headers/RetryAfter"
+     }
+    }
+   },
+   "Error413": {
+    "description": "payload_too_large",
+    "content": {
+     "application/json": {
+      "schema": {
+       "$ref": "#/components/schemas/Error"
+      }
+     }
+    },
+    "headers": {
+     "Cache-Control": {
+      "$ref": "#/components/headers/NoStore"
+     }
+    }
+   },
+   "Error415": {
+    "description": "unsupported_media_type",
+    "content": {
+     "application/json": {
+      "schema": {
+       "$ref": "#/components/schemas/Error"
+      }
+     }
+    },
+    "headers": {
+     "Cache-Control": {
+      "$ref": "#/components/headers/NoStore"
+     }
+    }
+   },
+   "Error422": {
+    "description": "ciphertext_rejected",
+    "content": {
+     "application/json": {
+      "schema": {
+       "$ref": "#/components/schemas/Error"
+      }
+     }
+    },
+    "headers": {
+     "Cache-Control": {
+      "$ref": "#/components/headers/NoStore"
+     }
+    }
+   },
+   "HeaderTooLarge": {
+    "description": "HTTP parser may reject excessive headers before the JSON handler. Body is not part of the application JSON contract."
+   }
+  },
+  "headers": {
+   "NoStore": {
+    "schema": {
+     "const": "no-store"
+    }
+   },
+   "RetryAfter": {
+    "description": "Optional bounded delay, whole seconds 1..30.",
+    "schema": {
+     "type": "integer",
+     "minimum": 1,
+     "maximum": 30
+    }
+   }
+  }
+ },
+ "x-limits": {
+  "transport": "HTTP/2 prior knowledge on the stream; one connection; at most 8 concurrent streams",
+  "body": "request bodies at most 128 KiB; header list at most 8 KiB",
+  "admission": "sign, derive, seal and unseal share 20 requests per second with a burst of 40; overload is 429 with Retry-After: 1",
+  "deadlines": "every request is unary: 2 seconds including the body",
+  "parsing": "exact unique field names; unknown members, duplicate keys, malformed UTF-8 and non-canonical base64url are invalid_request"
+ }
+}
