@@ -81,7 +81,16 @@ Go test binaries and bootstrap harness passed in a disposable Ubuntu 24.04 conta
 The release gate rejected altered bytes, unavailable published input and a Device API the binary does not serve.
 See [PLAN.md](PLAN.md) for commands and limits.
 
+## Published Manifest Checked (review, 2026-11-17)
+
+The workload release `v0.4.0` publishes a schema 3 `manifest.json`. The firmware parser accepts it unchanged
+(three services, platform `linux/amd64`, scopes `device.connectivity:create` and `responses:create`). The pinned
+`release/workload-release.json` is still the schema 2 document of `v0.3.1`. Replace it with the unmodified
+published file when the device API transport ([SELF-19](../SELF-19/ISSUE.md)) is in place. Verify the pin against
+the published bytes and confirm convergence of the real stack on a disposable host. Tagging the firmware release
+stays a manual owner step.
+
 ## Next Action
 
-Use the verified manifest model for SELF-17. Complete the published-pin and live convergence checks with the
-matching workload release and SELF-19. SELF-16's service-start evidence remains tracked in SELF-16.
+Complete the published-pin and live convergence checks with the matching workload release and SELF-19.
+SELF-16's service-start evidence remains tracked in SELF-16.
