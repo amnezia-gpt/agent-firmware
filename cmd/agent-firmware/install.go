@@ -11,12 +11,16 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/amnezia-gpt/agent-firmware/internal/backendprofile"
 	"github.com/amnezia-gpt/agent-firmware/internal/configuration"
 	"github.com/amnezia-gpt/agent-firmware/internal/deviceapi"
+	"github.com/amnezia-gpt/agent-firmware/internal/discovery"
 	"github.com/amnezia-gpt/agent-firmware/internal/dockerengine"
 	"github.com/amnezia-gpt/agent-firmware/internal/host"
 	"github.com/amnezia-gpt/agent-firmware/internal/installer"
 	"github.com/amnezia-gpt/agent-firmware/internal/service"
+	"github.com/amnezia-gpt/agent-firmware/internal/workload"
+	"github.com/amnezia-gpt/agent-firmware/internal/workloadrelease"
 )
 
 // hostFirmware gives the installer the firmware's own state operations. The
@@ -164,19 +168,27 @@ func runInstall(args []string, input io.Reader, stdout, stderr io.Writer) int {
 			_, _ = io.WriteString(stderr, "agent-firmware: "+message+"\n")
 		}
 	}
-	progress("Reading the configuration published by the authorization server")
-	discovery, cancel := context.WithTimeout(ctx, time.Minute)
-	profile, err := discover(discovery, issuer)
-	cancel()
-	if err != nil {
-		return report(stderr, err.Error(), 1)
-	}
-	manifest, err := openInput(release)
+	releaseFile, err := openInput(release)
 	if err != nil {
 		return report(stderr, "input_read_failed", 1)
 	}
-	accepted, err := configuration.Parse(bytes.NewReader(profile), manifest)
-	manifest.Close()
+	raw, err := io.ReadAll(io.LimitReader(releaseFile, workloadrelease.MaxBytes+1))
+	releaseFile.Close()
+	if err != nil {
+		return report(stderr, "input_read_failed", 1)
+	}
+	manifest, err := workloadrelease.Parse(bytes.NewReader(raw))
+	if err != nil {
+		return report(stderr, err.Error(), 1)
+	}
+	if err := checkDeployableRelease(manifest); err != nil {
+		return report(stderr, err.Error(), 1)
+	}
+
+	progress("Reading the configuration published by the authorization server")
+	lookup, cancel := context.WithTimeout(ctx, time.Minute)
+	accepted, err := prepareInstallInput(lookup, configuration.Store{Path: defaultStateDir}, issuer, raw)
+	cancel()
 	if err != nil {
 		return report(stderr, err.Error(), 1)
 	}
@@ -197,4 +209,54 @@ func runInstall(args []string, input io.Reader, stdout, stderr io.Writer) int {
 	return respond(stdout, stderr, struct {
 		Installed bool `json:"installed"`
 	}{true})
+}
+
+// An update reuses the enrollment's pinned trust and only refreshes resources
+// if one of the new manifest's scopes is missing.
+func prepareInstallInput(ctx context.Context, store configuration.Store, issuer string, raw []byte) (*configuration.Input, error) {
+	current, err := store.Load()
+	if errors.Is(err, configuration.ErrMissing) {
+		profile, err := discover(ctx, issuer)
+		if err != nil {
+			return nil, err
+		}
+		return checkedInstallInput(profile, raw)
+	}
+	if err != nil {
+		return nil, err
+	}
+	profile := current.Profile()
+	if profile.AuthIssuer != issuer {
+		return nil, configuration.ErrIdentityConflict
+	}
+	saved, err := backendprofile.Encode(profile)
+	if err != nil {
+		return nil, configuration.ErrInvalid
+	}
+	input, err := checkedInstallInput(saved, raw)
+	if !errors.Is(err, backendprofile.ErrScopeMissing) {
+		return input, err
+	}
+	refreshed, err := refreshResources(ctx, profile)
+	if err != nil {
+		return nil, err
+	}
+	return checkedInstallInput(refreshed, raw)
+}
+
+var refreshResources = func(ctx context.Context, profile backendprofile.Profile) ([]byte, error) {
+	client := discovery.NewClient()
+	defer client.CloseIdleConnections()
+	return discovery.RefreshResources(ctx, client, profile)
+}
+
+func checkedInstallInput(profile, raw []byte) (*configuration.Input, error) {
+	input, err := configuration.Parse(bytes.NewReader(profile), bytes.NewReader(raw))
+	if err != nil {
+		return nil, err
+	}
+	if _, err := workload.FromInput(input); err != nil {
+		return nil, err
+	}
+	return input, nil
 }

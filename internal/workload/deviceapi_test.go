@@ -1,21 +1,58 @@
 package workload
 
-import "testing"
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"os"
+	"slices"
+	"testing"
 
-func TestDeviceAPIProfilePreservesInstallationAndLimitsGatewayAccess(t *testing.T) {
-	stack := testStack(t)
-	if stack.Installation != "718b4bcec873094b25c27059bbf48cae" {
-		t.Fatal("namespace changed before manifest cutover")
+	"github.com/amnezia-gpt/agent-firmware/internal/backendprofile"
+)
+
+func TestReleaseVectorsBuildAndApplyAnotherStack(t *testing.T) {
+	raw, err := os.ReadFile("../../.agents/plans/SELF-21/workload-release-v3.vectors.json")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if stack.Specs[0].Env["FIRMWARE_DEVICE_API_MODE"] != "required" || len(stack.Specs[0].Bindings) != 2 {
-		t.Fatal("Gateway API setup missing")
+	var vectors struct{ Valid json.RawMessage }
+	if err := json.Unmarshal(raw, &vectors); err != nil {
+		t.Fatal(err)
 	}
-	if len(stack.Specs[1].Bindings) != 0 || len(stack.Specs[2].Bindings) != 0 {
-		t.Fatal("API exposed outside Gateway")
+	profile, err := os.ReadFile("../backendprofile/testdata/profile-v4.json")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, binding := range stack.Specs[0].Bindings {
-		if !binding.ReadOnly {
-			t.Fatal("API mount writable")
+	stack, err := FromReaders(bytes.NewReader(profile), bytes.NewReader(vectors.Valid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stack.Specs) != 2 || stack.Specs[0].Role != "front" || stack.Specs[1].Role != "worker" ||
+		stack.Specs[0].Env["API_BASE_URL"] != "https://resource.example/api" || stack.Client.Service != "front" ||
+		stack.Installation != EnrollmentID("https://auth.example") {
+		t.Fatal("manifest was not resolved into the expected stack")
+	}
+
+	engine := fake()
+	if result, err := Apply(t.Context(), engine, &memoryJournal{}, stack); err != nil || !result.Applied {
+		t.Fatalf("alternative stack convergence: %+v, %v", result, err)
+	}
+	expect := []string{"prepare", "create:front", "start:front", "wait:front", "create:worker", "start:worker", "wait:worker"}
+	if !slices.Equal(engine.calls, expect) {
+		t.Fatalf("wrong health order: %v", engine.calls)
+	}
+
+	for _, resources := range []struct {
+		replacement string
+		want        error
+	}{
+		{`"example:other"`, backendprofile.ErrScopeMissing},
+		{`"example:use"`, nil},
+	} {
+		modified := bytes.Replace(profile, []byte(`"example:use"`), []byte(resources.replacement), 1)
+		if _, err := FromReaders(bytes.NewReader(modified), bytes.NewReader(vectors.Valid)); !errors.Is(err, resources.want) {
+			t.Fatalf("scope resolution: %v", err)
 		}
 	}
 }

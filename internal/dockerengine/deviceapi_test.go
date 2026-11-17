@@ -12,30 +12,27 @@ import (
 	"time"
 )
 
-func TestOnlyExactGatewayReadOnlyAPIBindsAreRecognized(t *testing.T) {
-	id := strings.Repeat("1", 32)
-	s := workload.Spec{Role: "gateway", Installation: id, Bindings: []workload.Binding{{Source: workload.APIRuntimeDir(id) + "/api", Target: "/run/firmware-device-api", ReadOnly: true}, {Source: workload.APIRuntimeDir(id) + "/auth", Target: "/run/firmware-device-api-auth", ReadOnly: true}}}
-	if !validBindingProfile(s) {
-		t.Fatal("valid Gateway profile rejected")
+func TestOnlyDeclaredNamedVolumesAreRecognized(t *testing.T) {
+	spec := workload.Spec{Mounts: []workload.Mount{{Name: "owned-volume", Target: "/data"}}}
+	good := container.MountPoint{Type: mount.TypeVolume, Name: "owned-volume", Destination: "/data"}
+	if !knownMount(spec, good) {
+		t.Fatal("declared mount rejected")
 	}
-	good := container.MountPoint{Type: mount.TypeBind, Source: s.Bindings[0].Source, Destination: s.Bindings[0].Target, RW: false}
-	if !knownMount(s, good) {
-		t.Fatal("API bind rejected")
-	}
-	for _, c := range []container.MountPoint{{Type: mount.TypeBind, Source: "/tmp/foreign", Destination: good.Destination}, {Type: mount.TypeBind, Source: good.Source, Destination: good.Destination, RW: true}, {Type: mount.TypeBind, Source: good.Source, Destination: "/different"}} {
-		if knownMount(s, c) {
-			t.Fatal("foreign/writable bind accepted")
+	for _, invalid := range []container.MountPoint{
+		{Type: mount.TypeBind, Name: good.Name, Destination: good.Destination, Source: "/private"},
+		{Type: mount.TypeVolume, Name: "other-volume", Destination: good.Destination},
+	} {
+		if knownMount(spec, invalid) {
+			t.Fatal("foreign mount accepted")
 		}
-	}
-	s.Role = "agent"
-	if validBindingProfile(s) {
-		t.Fatal("Codex received API")
 	}
 }
 
-func TestAPIGatewayUserIsNumericForNamedImageUsers(t *testing.T) {
+func TestCreateUsesManifestUserAndNamedVolumes(t *testing.T) {
 	id := strings.Repeat("1", 32)
-	spec := workload.Spec{Role: "gateway", Installation: id, Name: "test", Image: "image@sha256:test", Bindings: []workload.Binding{{Source: workload.APIRuntimeDir(id) + "/api", Target: "/run/firmware-device-api", ReadOnly: true}, {Source: workload.APIRuntimeDir(id) + "/auth", Target: "/run/firmware-device-api-auth", ReadOnly: true}}}
+	spec := workload.Spec{Role: "service", Installation: id, Name: "test", Image: "image@sha256:test", User: "65532:65532",
+		Mounts: []workload.Mount{{Name: "owned", Target: "/data", ReadOnly: true}}}
+
 	received := false
 	path := socketServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -48,8 +45,8 @@ func TestAPIGatewayUserIsNumericForNamedImageUsers(t *testing.T) {
 				User       string
 				HostConfig struct{ Mounts []mount.Mount }
 			}
-			if json.NewDecoder(r.Body).Decode(&request) != nil || request.User != "65532:65532" || len(request.HostConfig.Mounts) != 2 {
-				t.Error("API Gateway UID/binds not enforced")
+			if json.NewDecoder(r.Body).Decode(&request) != nil || request.User != "65532:65532" || len(request.HostConfig.Mounts) != 1 || request.HostConfig.Mounts[0].Type != mount.TypeVolume || !request.HostConfig.Mounts[0].ReadOnly {
+				t.Error("manifest user and volume requirements not enforced")
 			}
 			received = true
 			fmt.Fprint(w, `{"Id":"example"}`)
@@ -82,12 +79,10 @@ func TestDataVolumeAlonePreventsFreshKeyBootstrap(t *testing.T) {
 			t.Error("preparation mutated engine")
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if strings.HasSuffix(r.URL.Path, "-identity") {
-			w.WriteHeader(404)
-			fmt.Fprint(w, `{"message":"not found"}`)
-			return
+		if !strings.HasSuffix(r.URL.Path, "/volumes") {
+			t.Error("unexpected inspection after finding retained data")
 		}
-		fmt.Fprintf(w, `{"Name":%q,"Driver":"local","Labels":{"org.amnezia.firmware.managed-by":"agent-firmware","org.amnezia.firmware.installation":%q,"org.amnezia.firmware.role":"volume"}}`, s.Volumes[1], id)
+		fmt.Fprintf(w, `{"Volumes":[{"Name":%q,"Driver":"local","Labels":{"org.amnezia.firmware.managed-by":"agent-firmware","org.amnezia.firmware.installation":%q,"org.amnezia.firmware.role":"volume"}}]}`, "af-"+id+"-old-state", id)
 	})
 	e, err := newClient(path, time.Second)
 	if err != nil {
@@ -97,5 +92,97 @@ func TestDataVolumeAlonePreventsFreshKeyBootstrap(t *testing.T) {
 	found, err := e.AnyVolumesExist(t.Context(), s)
 	if err != nil || !found {
 		t.Fatal("missing identity allowed reset despite credential data")
+	}
+}
+
+func TestPrepareChecksSharedImagesForEveryServiceBeforeCreatingResources(t *testing.T) {
+	const image = "registry.example/work/same@sha256:aaaa"
+	mutations := 0
+	path := socketServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/_ping" {
+			w.Header().Set("API-Version", "1.52")
+			return
+		}
+		if r.Method != "GET" {
+			mutations++
+			t.Error("invalid image constraints allowed a host mutation")
+		}
+		fmt.Fprint(w, `{"Id":"example","Os":"linux","Architecture":"amd64","Config":{"User":"1000:1000","Volumes":{"/data":{}},"Healthcheck":{"Test":["CMD","true"]}}}`)
+	})
+	engine, err := newClient(path, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	stack := workload.Stack{Specs: []workload.Spec{
+		{Role: "with-volume", Image: image, Mounts: []workload.Mount{{Name: "owned", Target: "/data"}}},
+		{Role: "without-volume", Image: image},
+	}}
+	if err := engine.Prepare(t.Context(), stack); err != workload.ErrConflict || mutations != 0 {
+		t.Fatalf("same-image validation: %v, %d mutations", err, mutations)
+	}
+}
+
+func TestEffectiveImageUserRejectsRootAndUnprovenNames(t *testing.T) {
+	for _, user := range []string{"", "root", "nonroot", "0", "0000:1000", "1000:0", "4294967295:101"} {
+		if validEffectiveUser(user) {
+			t.Fatalf("unsafe image user %q accepted", user)
+		}
+	}
+	for _, user := range []string{"101", "101:102"} {
+		if !validEffectiveUser(user) {
+			t.Fatalf("numeric non-root user %q rejected", user)
+		}
+	}
+}
+
+func TestRetiredListRechecksOwnershipBeforeReturningAContainer(t *testing.T) {
+	for _, foreign := range []bool{false, true} {
+		label := "owned"
+		if foreign {
+			label = "foreign"
+		}
+		t.Run(label, func(t *testing.T) {
+			id := strings.Repeat("a", 32)
+			containerID := strings.Repeat("b", 64)
+			name := "af-" + id + "-retired"
+			stack := workload.Stack{Installation: id, Network: "af-" + id + "-net"}
+			path := socketServer(t, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if r.URL.Path == "/_ping" {
+					w.Header().Set("API-Version", "1.52")
+					return
+				}
+				if r.Method != "GET" {
+					t.Error("retirement discovery mutated Docker")
+				}
+				if strings.HasSuffix(r.URL.Path, "/containers/json") {
+					if r.URL.Query().Get("all") != "1" || !strings.Contains(r.URL.Query().Get("filters"), id) {
+						t.Error("retirement listing was not scoped to the installation")
+					}
+					fmt.Fprintf(w, `[{"Id":%q,"Names":[%q],"Labels":{"org.amnezia.firmware.managed-by":"agent-firmware","org.amnezia.firmware.installation":%q,"org.amnezia.firmware.role":"retired"}}]`, containerID, "/"+name, id)
+					return
+				}
+				if foreign {
+					fmt.Fprintf(w, `{"Id":%q,"Name":%q,"Config":{"Labels":{"org.amnezia.firmware.installation":%q,"org.amnezia.firmware.role":"retired"}}}`, containerID, "/"+name, id)
+					return
+				}
+				fmt.Fprintf(w, `{"Id":%q,"Name":%q,"Config":{"Labels":{"org.amnezia.firmware.managed-by":"agent-firmware","org.amnezia.firmware.installation":%q,"org.amnezia.firmware.role":"retired"}}}`, containerID, "/"+name, id)
+			})
+			engine, err := newClient(path, time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer engine.Close()
+			retired, err := engine.Retired(t.Context(), stack)
+			if foreign {
+				if err != workload.ErrConflict || len(retired) != 0 {
+					t.Fatalf("foreign container selected: %v", err)
+				}
+			} else if err != nil || len(retired) != 1 || retired[0].ID != containerID {
+				t.Fatalf("owned container missing: %v", err)
+			}
+		})
 	}
 }

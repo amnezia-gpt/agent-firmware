@@ -1,4 +1,4 @@
-// Package backendprofile validates the existing client backend-profile v3 input.
+// Package backendprofile validates the retained issuer metadata.
 package backendprofile
 
 import (
@@ -11,15 +11,18 @@ import (
 	"io"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/amnezia-gpt/agent-firmware/internal/strictjson"
+	"github.com/amnezia-gpt/agent-firmware/internal/workloadrelease"
 )
 
 const (
 	MaxProfileBytes = 32 * 1024
 	maxTrustBytes   = 16 * 1024
+	MaxResources    = 16
 )
 
 // Error is a bounded diagnostic; it never contains input or underlying errors.
@@ -28,26 +31,55 @@ type Error string
 func (e Error) Error() string { return string(e) }
 
 const (
-	ErrRead        Error = "profile_read_failed"
-	ErrTooLarge    Error = "profile_too_large"
-	ErrJSON        Error = "invalid_profile_json"
-	ErrVersion     Error = "unsupported_profile_version"
-	ErrProfileID   Error = "invalid_profile_id"
-	ErrAuthIssuer  Error = "invalid_auth_issuer"
-	ErrRouterURL   Error = "invalid_router_base_url"
-	ErrRuntimeURL  Error = "invalid_runtime_gateway_base_url"
-	ErrTrustBundle Error = "invalid_ingress_trust_bundle"
-	ErrTrustPin    Error = "invalid_ingress_trust_pin"
+	ErrRead           Error = "profile_read_failed"
+	ErrTooLarge       Error = "profile_too_large"
+	ErrJSON           Error = "invalid_profile_json"
+	ErrVersion        Error = "unsupported_profile_version"
+	ErrProfileID      Error = "invalid_profile_id"
+	ErrAuthIssuer     Error = "invalid_auth_issuer"
+	ErrResources      Error = "invalid_protected_resources"
+	ErrScopeMissing   Error = "protected_resource_scope_missing"
+	ErrScopeAmbiguous Error = "protected_resource_scope_ambiguous"
+	ErrTrustBundle    Error = "invalid_ingress_trust_bundle"
+	ErrTrustPin       Error = "invalid_ingress_trust_pin"
 )
 
 // Profile contains normalized service coordinates and the original trust string.
 type Profile struct {
-	ID                    string
-	AuthIssuer            string
-	RouterBaseURL         string
-	RuntimeGatewayBaseURL string
-	IngressTrustBundle    string
-	IngressTrustSHA256    string
+	ID                 string     `json:"backend_profile"`
+	AuthIssuer         string     `json:"auth_issuer"`
+	Resources          []Resource `json:"protected_resources"`
+	IngressTrustBundle string     `json:"ingress_trust_bundle"`
+	IngressTrustSHA256 string     `json:"ingress_trust_sha256"`
+}
+
+type Resource struct {
+	Identifier string   `json:"resource"`
+	Scopes     []string `json:"scopes_supported"`
+}
+
+func (p Profile) ResolveScope(scope string) (string, error) {
+	var result string
+	for _, resource := range p.Resources {
+		if !slices.Contains(resource.Scopes, scope) {
+			continue
+		}
+		if result != "" {
+			return "", ErrScopeAmbiguous
+		}
+		result = resource.Identifier
+	}
+	if result == "" {
+		return "", ErrScopeMissing
+	}
+	return result, nil
+}
+
+func Encode(profile Profile) ([]byte, error) {
+	return json.Marshal(struct {
+		SchemaVersion int `json:"schema_version"`
+		Profile
+	}{4, profile})
 }
 
 var profileID = regexp.MustCompile(`^[a-z][a-z0-9._-]{0,63}$`)
@@ -66,33 +98,24 @@ func Parse(reader io.Reader) (Profile, error) {
 }
 
 func parse(data []byte) (Profile, error) {
-	fields, ok := strictjson.Object(data, "schema_version", "backend_profile", "auth_issuer", "router_base_url",
-		"runtime_gateway_base_url", "ingress_trust_bundle", "ingress_trust_sha256")
+	fields, ok := strictjson.Object(data, "schema_version", "backend_profile", "auth_issuer", "protected_resources", "ingress_trust_bundle", "ingress_trust_sha256")
 	if !ok {
 		return Profile{}, ErrJSON
 	}
-	if string(bytes.TrimSpace(fields["schema_version"])) != "3" {
+	if string(bytes.TrimSpace(fields["schema_version"])) != "4" {
 		return Profile{}, ErrVersion
 	}
 	profile := Profile{ID: strictjson.StringField(fields, "backend_profile")}
 	if !profileID.MatchString(profile.ID) {
 		return Profile{}, ErrProfileID
 	}
-	profile.AuthIssuer, ok = httpsURL(strictjson.StringField(fields, "auth_issuer"), false)
+	profile.AuthIssuer, ok = httpsURL(strictjson.StringField(fields, "auth_issuer"))
 	if !ok {
 		return Profile{}, ErrAuthIssuer
 	}
-	profile.RouterBaseURL, ok = httpsURL(strictjson.StringField(fields, "router_base_url"), true)
+	profile.Resources, ok = resources(fields["protected_resources"])
 	if !ok {
-		return Profile{}, ErrRouterURL
-	}
-	profile.RuntimeGatewayBaseURL, ok = httpsURL(strictjson.StringField(fields, "runtime_gateway_base_url"), false)
-	if !ok {
-		return Profile{}, ErrRuntimeURL
-	}
-	runtimeURL, _ := url.Parse(profile.RuntimeGatewayBaseURL)
-	if strings.HasSuffix(strings.TrimRight(runtimeURL.Path, "/"), "/v1") {
-		return Profile{}, ErrRuntimeURL
+		return Profile{}, ErrResources
 	}
 	profile.IngressTrustBundle = strictjson.StringField(fields, "ingress_trust_bundle")
 	if !validTrust(profile.IngressTrustBundle, profile.AuthIssuer) {
@@ -107,7 +130,40 @@ func parse(data []byte) (Profile, error) {
 	return profile, nil
 }
 
-func httpsURL(raw string, router bool) (string, bool) {
+func resources(raw []byte) ([]Resource, bool) {
+	var documents []json.RawMessage
+	if json.Unmarshal(raw, &documents) != nil || documents == nil || len(documents) > MaxResources {
+		return nil, false
+	}
+	seen := make(map[string]bool, len(documents))
+	result := make([]Resource, 0, len(documents))
+	for _, document := range documents {
+		fields, ok := strictjson.Object(document, "resource", "scopes_supported")
+		if !ok {
+			return nil, false
+		}
+		name := strictjson.StringField(fields, "resource")
+		if _, valid := httpsURL(name); !valid || seen[name] {
+			return nil, false
+		}
+		seen[name] = true
+		var scopes []string
+		if json.Unmarshal(fields["scopes_supported"], &scopes) != nil || scopes == nil {
+			return nil, false
+		}
+		slices.Sort(scopes)
+		for i, scope := range scopes {
+			if !workloadrelease.ValidScope(scope) || i > 0 && scopes[i-1] == scope {
+				return nil, false
+			}
+		}
+		result = append(result, Resource{Identifier: name, Scopes: scopes})
+	}
+	slices.SortFunc(result, func(a, b Resource) int { return strings.Compare(a.Identifier, b.Identifier) })
+	return result, true
+}
+
+func httpsURL(raw string) (string, bool) {
 	u, err := url.Parse(raw)
 	if err != nil || raw == "" || u.Scheme != "https" || u.Hostname() == "" || u.Opaque != "" ||
 		u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.Contains(raw, "#") {
@@ -128,9 +184,6 @@ func httpsURL(raw string, router bool) (string, bool) {
 		if err != nil || n < 1 || n > 65535 {
 			return "", false
 		}
-	}
-	if router && u.EscapedPath() != "/v1" && u.EscapedPath() != "/v1/" {
-		return "", false
 	}
 	u.Host = strings.ToLower(u.Host)
 	// Trim a literal trailing slash only; escaped path bytes remain significant.

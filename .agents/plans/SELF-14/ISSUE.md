@@ -7,7 +7,7 @@
 - Size / risk: Large / high (installation, identity, key custody and the device API all change)
 - Children: [SELF-15](../SELF-15/ISSUE.md), [SELF-16](../SELF-16/ISSUE.md), [SELF-17](../SELF-17/ISSUE.md),
   [SELF-18](../SELF-18/ISSUE.md), [SELF-19](../SELF-19/ISSUE.md), [SELF-20](../SELF-20/ISSUE.md),
-  [SELF-21](../SELF-21/ISSUE.md)
+  [SELF-21](../SELF-21/ISSUE.md), [SELF-22](../SELF-22/ISSUE.md)
 - Design: [DESIGN.md](DESIGN.md). Vocabulary and stages: [docs/device-lifecycle.md](../../../docs/device-lifecycle.md)
 - Authorization: owner accepted the lifecycle, the command form, the device API v3 operations and the identity
   statement format in the design dialogue of 2026-11-16 and 2026-11-17, and asked to record the issues.
@@ -33,11 +33,12 @@ The firmware implements the lifecycle of [docs/device-lifecycle.md](../../../doc
 
 ## Scope
 
-In scope: the seven children. No backward compatibility: nothing is in production, earlier workload contracts and
+In scope: the eight children. No backward compatibility: nothing is in production, earlier workload contracts and
 their migration machinery are removed, test hosts are reinstalled.
 
-Not in scope: other host platforms and architectures, publisher signatures of the image, a specified state
-delivered by the domain, clone detection, an `uninstall` command (deliberately absent for now).
+Linux arm64 support is tracked separately in [SELF-22](../SELF-22/ISSUE.md). Other host platforms and
+architectures, publisher signatures of the image, domain-delivered specified state, clone detection, and an
+`uninstall` command are outside the scope of this feature.
 
 ## Acceptance Criteria
 

@@ -1,23 +1,127 @@
 {
-  "schema_version": 2,
-  "kind": "agent-workloads-release",
+  "schema_version": 3,
+  "kind": "workload-release",
   "release": "v0.1.0",
-  "source_revision": "1111111111111111111111111111111111111111",
-  "platform": "linux/amd64",
-  "images": {
-    "openclaw-codex": {
-      "repository": "docker.io/amneziavpn/agent-workload-openclaw-codex",
-      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "reference": "docker.io/amneziavpn/agent-workload-openclaw-codex@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "source_tag": "sha-1111111111111111111111111111111111111111",
-      "release_tag": "v0.1.0"
+  "source_revision": "0123456789abcdef0123456789abcdef01234567",
+  "device_api": "urn:agent-firmware:device-api:v3",
+  "platforms": [
+    "linux/amd64",
+    "linux/arm64"
+  ],
+  "volumes": [
+    "front-state",
+    "worker-home",
+    "worker-auth",
+    "storage-home"
+  ],
+  "services": {
+    "gateway": {
+      "image": {
+        "repository": "registry.example/acme/front",
+        "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "user": "65532:65532",
+      "aliases": [
+        "gateway"
+      ],
+      "environment": {
+        "AUTH_ISSUER": {
+          "from": "issuer"
+        },
+        "TRUST_BUNDLE": {
+          "from": "trust_bundle"
+        },
+        "TRUST_SHA256": {
+          "from": "trust_bundle_sha256"
+        },
+        "API_BASE_URL": {
+          "from": "resource",
+          "scope": "example:use"
+        },
+        "STATE_DIR": {
+          "value": "/var/lib/front"
+        }
+      },
+      "volumes": [
+        {
+          "source": "front-state",
+          "target": "/var/lib/front"
+        },
+        {
+          "source": "worker-auth",
+          "target": "/run/worker-auth"
+        }
+      ],
+      "health_start_seconds": 5,
+      "stop_grace_seconds": 15
     },
-    "amgpt-device-gateway": {
-      "repository": "docker.io/amneziavpn/agent-workload-amgpt-auth-proxy",
-      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "reference": "docker.io/amneziavpn/agent-workload-amgpt-auth-proxy@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "source_tag": "sha-1111111111111111111111111111111111111111",
-      "release_tag": "v0.1.0"
+    "agent": {
+      "image": {
+        "repository": "registry.example/acme/worker",
+        "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "read_only": true,
+      "aliases": [
+        "agent"
+      ],
+      "depends_on": [
+        "gateway"
+      ],
+      "volumes": [
+        {
+          "source": "worker-home",
+          "target": "/home/worker"
+        },
+        {
+          "source": "worker-auth",
+          "target": "/run/worker-auth",
+          "read_only": true
+        }
+      ],
+      "health_start_seconds": 60,
+      "stop_grace_seconds": 20
+    },
+    "storage": {
+      "image": {
+        "repository": "registry.example/acme/worker",
+        "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "read_only": true,
+      "aliases": [
+        "storage"
+      ],
+      "depends_on": [
+        "gateway"
+      ],
+      "volumes": [
+        {
+          "source": "storage-home",
+          "target": "/home/worker"
+        },
+        {
+          "source": "worker-auth",
+          "target": "/run/worker-auth",
+          "read_only": true
+        }
+      ],
+      "health_start_seconds": 60,
+      "stop_grace_seconds": 20
     }
+  },
+  "device_api_client": {
+    "service": "gateway",
+    "dial": [
+      "frontctl",
+      "dial-stdio"
+    ],
+    "enrollment_status": [
+      "frontctl",
+      "enrollment",
+      "status"
+    ],
+    "deregister": [
+      "frontctl",
+      "deregister"
+    ]
   }
 }

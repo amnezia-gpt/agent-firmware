@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/amnezia-gpt/agent-firmware/internal/backendprofile"
 	"github.com/amnezia-gpt/agent-firmware/internal/configuration"
 	"github.com/amnezia-gpt/agent-firmware/internal/installer"
 )
@@ -15,7 +16,11 @@ import (
 const installCode = "enrc_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopq"
 
 func TestInstallCommand(t *testing.T) {
-	profile, err := os.ReadFile("../../internal/backendprofile/testdata/profile-v3.json")
+	enableTestRelease(t)
+	state := defaultStateDir
+	defaultStateDir = filepath.Join(t.TempDir(), "state")
+	t.Cleanup(func() { defaultStateDir = state })
+	profile, err := os.ReadFile("../../internal/backendprofile/testdata/profile-v4.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,5 +112,69 @@ func TestInstallCommand(t *testing.T) {
 	run(with("--enrollment-code-stdin"), strings.NewReader("x"), &out, &out)
 	if asked != 0 {
 		t.Fatal("discovery ran for an invalid code")
+	}
+}
+
+func TestPrepareInstallRefreshesMissingScopesOnce(t *testing.T) {
+	profileBytes, err := os.ReadFile("../../internal/backendprofile/testdata/profile-v4.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	releaseBytes, err := os.ReadFile("../../internal/workloadrelease/testdata/manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := configuration.Parse(bytes.NewReader(profileBytes), bytes.NewReader(releaseBytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := configuration.Store{Path: filepath.Join(t.TempDir(), "state")}
+	if _, err := store.Save(input); err != nil {
+		t.Fatal(err)
+	}
+
+	originalRefresh := refreshResources
+	t.Cleanup(func() { refreshResources = originalRefresh })
+	refreshes := 0
+	refreshResources = func(_ context.Context, profile backendprofile.Profile) ([]byte, error) {
+		refreshes++
+		profile.Resources[0].Scopes = append(profile.Resources[0].Scopes, "example:next")
+		return backendprofile.Encode(profile)
+	}
+	issuer := input.Profile().AuthIssuer
+	if _, err := prepareInstallInput(t.Context(), store, issuer, releaseBytes); err != nil || refreshes != 0 {
+		t.Fatalf("resolved input refreshed resources: %v (%d)", err, refreshes)
+	}
+	next := bytes.ReplaceAll(releaseBytes, []byte("example:use"), []byte("example:next"))
+	refreshed, err := prepareInstallInput(t.Context(), store, issuer, next)
+	if err != nil || refreshed.Profile().IngressTrustBundle != input.Profile().IngressTrustBundle || refreshes != 1 {
+		t.Fatalf("missing scope refresh failed: %v (%d)", err, refreshes)
+	}
+	missing := bytes.ReplaceAll(releaseBytes, []byte("example:use"), []byte("example:absent"))
+	if _, err := prepareInstallInput(t.Context(), store, issuer, missing); err != backendprofile.ErrScopeMissing || refreshes != 2 {
+		t.Fatalf("unresolved input retried or accepted: %v (%d)", err, refreshes)
+	}
+}
+
+func TestReleaseGateRejectsUnavailableTransportBeforeDiscovery(t *testing.T) {
+	path := "../../internal/workloadrelease/testdata/manifest.json"
+	before := hostReady
+	hostReady = func() string { return "" }
+	t.Cleanup(func() { hostReady = before })
+	original := discover
+	discover = func(context.Context, string) ([]byte, error) {
+		t.Fatal("discovery attempted for unavailable transport")
+		return nil, nil
+	}
+	t.Cleanup(func() { discover = original })
+	for _, args := range [][]string{
+		{"validate-release", "--release", path},
+		{"install", "--dry-run", "--issuer", "https://auth.example", "--release", path},
+	} {
+		var out, stderr bytes.Buffer
+		if code := run(args, strings.NewReader(""), &out, &stderr); code != 1 ||
+			stderr.String() != "{\"error_code\":\"unsupported_device_api\"}\n" || out.Len() != 0 {
+			t.Fatalf("release gate: %d %q %q", code, &out, &stderr)
+		}
 	}
 }

@@ -173,6 +173,19 @@ publishes a schema 3 release manifest;
 the domain accepts and records the identity statement (optional first, required after the joint release) and
 shows the new command. The joint release and one real-host check close the feature.
 
+## Window without a working installation (review of SELF-21, 2026-11-17)
+
+From SELF-21 until SELF-19 the firmware applies no stack on a real host: it accepts only a schema 3 manifest that
+asks for device API v3, while the binary still serves the earlier API, and no schema 3 manifest is published yet.
+This is deliberate and fails closed. Its consequences:
+
+- Until a matching workload is published and the v3 transport is available, firmware tests for SELF-17,
+  SELF-18 and SELF-20 use fake engine and workload boundaries. SELF-20 still follows SELF-19.
+- A check that needs a real host and predates the window is run at its own commit. The pending systemd start of
+  SELF-16 is run at `5f5450f`.
+- No firmware release is cut inside the window.
+- The first real-host run of the whole chain is the joint release with the workloads and the domain.
+
 ## Open
 
 - **Operational key rotation.** Not designed.

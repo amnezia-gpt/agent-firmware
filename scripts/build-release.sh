@@ -23,11 +23,17 @@ digest() {
  else shasum -a 256 "$1" | cut -d ' ' -f 1; fi
 }
 
+# Release CI passes the original asset downloaded from the selected workload release.
+if [ "${WORKLOAD_PUBLISHED_MANIFEST+x}" = x ]; then
+ [ -f "$WORKLOAD_PUBLISHED_MANIFEST" ] && cmp -s "$workload" "$WORKLOAD_PUBLISHED_MANIFEST" \
+  || { echo 'the workload release pin differs from the published manifest' >&2; exit 1; }
+fi
+# The firmware of this very revision must serve the API the release requires.
+go run ./cmd/agent-firmware validate-release --release "$workload" >/dev/null \
+ || { echo 'this firmware rejects the workload release file' >&2; exit 1; }
+
 mkdir -p "$out"
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o "$out/agent-firmware-linux-amd64" ./cmd/agent-firmware
-# The firmware of this very revision must accept the workload release it ships with.
-go run ./cmd/agent-firmware validate --profile internal/backendprofile/testdata/profile-v3.json --release "$workload" >/dev/null \
- || { echo 'this firmware rejects the workload release file' >&2; exit 1; }
 cp "$workload" "$out/workload-release.json"
 
 sed -e "s/@@RELEASE_TAG@@/$tag/" \

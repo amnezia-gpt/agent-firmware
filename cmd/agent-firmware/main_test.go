@@ -14,7 +14,7 @@ import (
 )
 
 func TestValidateProfileCommand(t *testing.T) {
-	profile, err := os.ReadFile("../../internal/backendprofile/testdata/profile-v3.json")
+	profile, err := os.ReadFile("../../internal/backendprofile/testdata/profile-v4.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestDiscoverProfileCommand(t *testing.T) {
 }
 
 func TestCommandReportsOutputFailure(t *testing.T) {
-	profile, err := os.ReadFile("../../internal/backendprofile/testdata/profile-v3.json")
+	profile, err := os.ReadFile("../../internal/backendprofile/testdata/profile-v4.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestCommandFailsWhenDiagnosticCannotBeWritten(t *testing.T) {
 
 func TestValidatePairedInputWithoutStateEffects(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"validate", "--profile", "../../internal/backendprofile/testdata/profile-v3.json", "--release", "../../internal/workloadrelease/testdata/manifest.json"}, strings.NewReader(""), &stdout, &stderr)
+	code := run([]string{"validate", "--profile", "../../internal/backendprofile/testdata/profile-v4.json", "--release", "../../internal/workloadrelease/testdata/manifest.json"}, strings.NewReader(""), &stdout, &stderr)
 	if code != 0 || stdout.String() != "{\"valid\":true}\n" || stderr.Len() != 0 {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}

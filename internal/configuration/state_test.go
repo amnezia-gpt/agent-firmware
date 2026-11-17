@@ -16,7 +16,7 @@ import (
 
 func testInput(t *testing.T) *Input {
 	t.Helper()
-	p, err := os.ReadFile("../backendprofile/testdata/profile-v3.json")
+	p, err := os.ReadFile("../backendprofile/testdata/profile-v4.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestWholeInputSurvivesReopenAndEquivalentUpdateIsNoOp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	profile := bytes.ReplaceAll(input.profileBytes, []byte("https://router.example/v1"), []byte("https://ROUTER.EXAMPLE/v1/"))
+	profile := bytes.ReplaceAll(input.profileBytes, []byte(`"auth_issuer": "https://auth.example"`), []byte(`"auth_issuer": "https://AUTH.EXAMPLE/"`))
 	equivalent, err := Parse(bytes.NewReader(profile), bytes.NewReader(input.releaseBytes))
 	if err != nil {
 		t.Fatal(err)

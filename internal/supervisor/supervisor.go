@@ -6,9 +6,11 @@ import (
 	"errors"
 	"time"
 
+	"github.com/amnezia-gpt/agent-firmware/internal/backendprofile"
 	"github.com/amnezia-gpt/agent-firmware/internal/configuration"
 	"github.com/amnezia-gpt/agent-firmware/internal/deviceapi"
 	"github.com/amnezia-gpt/agent-firmware/internal/workload"
+	"github.com/amnezia-gpt/agent-firmware/internal/workloadrelease"
 )
 
 const Interval = 30 * time.Second
@@ -75,7 +77,7 @@ func Run(ctx context.Context, cycle func(context.Context) (bool, error), emit fu
 	}
 }
 func code(err error) string {
-	for _, allowed := range []error{configuration.ErrInvalid, configuration.ErrUnsafe, configuration.ErrRead, configuration.ErrWrite, configuration.ErrCorrupt, configuration.ErrUncertain, configuration.ErrIdentityConflict, configuration.ErrRootSecret, deviceapi.ErrKeystore, configuration.ErrPending, workload.ErrEngine, workload.ErrConflict, workload.ErrHealth, workload.ErrTimeout, workload.ErrCanceled, workload.ErrDeadline, workload.ErrJournal, workload.ErrRecovery, workload.ErrCleanup} {
+	for _, allowed := range []error{workloadrelease.ErrDeviceAPI, workloadrelease.ErrPlatform, backendprofile.ErrScopeMissing, backendprofile.ErrScopeAmbiguous, configuration.ErrInvalid, configuration.ErrUnsafe, configuration.ErrRead, configuration.ErrWrite, configuration.ErrCorrupt, configuration.ErrUncertain, configuration.ErrIdentityConflict, configuration.ErrRootSecret, deviceapi.ErrKeystore, configuration.ErrPending, workload.ErrEngine, workload.ErrConflict, workload.ErrHealth, workload.ErrTimeout, workload.ErrCanceled, workload.ErrDeadline, workload.ErrJournal, workload.ErrRecovery, workload.ErrCleanup} {
 		if errors.Is(err, allowed) {
 			return allowed.Error()
 		}

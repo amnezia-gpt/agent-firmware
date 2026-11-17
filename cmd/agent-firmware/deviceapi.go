@@ -25,6 +25,10 @@ func saveConfiguration(parent context.Context, store configuration.Store, input 
 }
 
 var checkFreshWorkloadVolumes = func(ctx context.Context, session *configuration.Session, input *configuration.Input) error {
+	stack, err := workload.FromInput(input)
+	if err != nil {
+		return err
+	}
 	address, err := session.EngineAddress()
 	if err != nil {
 		return err
@@ -34,7 +38,7 @@ var checkFreshWorkloadVolumes = func(ctx context.Context, session *configuration
 		return err
 	}
 	defer engine.Close()
-	exists, err := engine.AnyVolumesExist(ctx, workload.FromInput(input))
+	exists, err := engine.AnyVolumesExist(ctx, stack)
 	if err != nil {
 		return err
 	}
@@ -59,7 +63,7 @@ func enrollmentCode(store configuration.Store, input io.Reader, set bool) (strin
 	if err != nil {
 		return "", err
 	}
-	codes, err := deviceapi.EnrollmentCodes(workload.FromInput(accepted).Installation, set)
+	codes, err := deviceapi.EnrollmentCodes(workload.EnrollmentID(accepted.Profile().AuthIssuer), set)
 	if err != nil {
 		return "", err
 	}
@@ -69,7 +73,7 @@ func enrollmentCode(store configuration.Store, input io.Reader, set bool) (strin
 	return "held", codes.Put(code)
 }
 func enrollmentState(accepted *configuration.Input) string {
-	if codes, err := deviceapi.EnrollmentCodes(workload.FromInput(accepted).Installation, false); err == nil && codes.Held() {
+	if codes, err := deviceapi.EnrollmentCodes(workload.EnrollmentID(accepted.Profile().AuthIssuer), false); err == nil && codes.Held() {
 		return "held"
 	}
 	return "none"
@@ -81,7 +85,7 @@ type apiManager struct {
 }
 
 func (m *apiManager) ensure(session *configuration.Session, input *configuration.Input) error {
-	installation := workload.FromInput(input).Installation
+	installation := workload.EnrollmentID(input.Profile().AuthIssuer)
 	if m.runtime != nil {
 		if m.installation != installation {
 			return deviceapi.ErrKeystore

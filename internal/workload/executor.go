@@ -8,9 +8,11 @@ import (
 	"encoding/json"
 	"errors"
 	"regexp"
+	"slices"
 	"time"
 
 	"github.com/amnezia-gpt/agent-firmware/internal/strictjson"
+	"github.com/amnezia-gpt/agent-firmware/internal/workloadrelease"
 )
 
 type State struct {
@@ -18,6 +20,7 @@ type State struct {
 	Running, Healthy, Matches                             bool
 }
 type Engine interface {
+	Retired(context.Context, Stack) ([]State, error)
 	Preflight(context.Context, Stack) error
 	Prepare(context.Context, Stack) error
 	Inspect(context.Context, string, Spec) (State, error)
@@ -45,6 +48,7 @@ type operation struct {
 	Entries        []entry
 }
 
+var serviceName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 var fullID = regexp.MustCompile(`^[a-f0-9]{64}$`)
 var operationID = regexp.MustCompile(`^[a-f0-9]{32}$`)
 var generationID = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
@@ -64,6 +68,17 @@ func specFor(stack Stack, role string) (Spec, bool) {
 	}
 	return Spec{}, false
 }
+func operationSpec(stack Stack, entry entry) (Spec, bool) {
+	spec, present := specFor(stack, entry.SpecRole)
+	if entry.Action != "retire" {
+		return spec, present
+	}
+	if present || !serviceName.MatchString(entry.SpecRole) {
+		return Spec{}, false
+	}
+	return Spec{Installation: stack.Installation, Role: entry.SpecRole, Name: "af-" + stack.Installation + "-" + entry.SpecRole}, true
+}
+
 func read(j Journal, stack Stack) (*operation, error) {
 	b, err := j.Read()
 	if err != nil {
@@ -95,12 +110,12 @@ func read(j Journal, stack Stack) (*operation, error) {
 	}
 	decoder := json.NewDecoder(bytes.NewReader(b))
 	decoder.DisallowUnknownFields()
-	if decoder.Decode(&op) != nil || op.Version != 1 || !operationID.MatchString(op.ID) || !generationID.MatchString(op.Generation) || len(op.Entries) < 1 || len(op.Entries) > 3 {
+	if decoder.Decode(&op) != nil || op.Version != 1 || !operationID.MatchString(op.ID) || !generationID.MatchString(op.Generation) || len(op.Entries) < 1 || len(op.Entries) > 2*workloadrelease.MaxServices {
 		return nil, ErrJournal
 	}
 	seen := map[string]bool{}
 	for _, v := range op.Entries {
-		s, ok := specFor(stack, v.SpecRole)
+		s, ok := operationSpec(stack, v)
 		if !ok || seen[v.SpecRole] || v.Name != s.Name || (v.NewID != "" && !fullID.MatchString(v.NewID)) {
 			return nil, ErrJournal
 		}
@@ -110,7 +125,10 @@ func read(j Journal, stack Stack) (*operation, error) {
 			if v.Old.ID != "" {
 				return nil, ErrJournal
 			}
-		case "noop", "start", "recreate", "restart":
+		case "noop", "start", "recreate", "restart", "retire":
+			if v.Action == "retire" && v.NewID != "" {
+				return nil, ErrJournal
+			}
 			if !fullID.MatchString(v.Old.ID) || v.Old.Name != s.Name || v.Old.Installation != s.Installation || v.Old.Role != s.Role {
 				return nil, ErrJournal
 			}
@@ -147,6 +165,25 @@ func Apply(parent context.Context, e Engine, j Journal, stack Stack) (Result, er
 	}
 	ctx, cancel := context.WithTimeout(parent, 15*time.Minute)
 	defer cancel()
+	retired, err := e.Retired(ctx, stack)
+	if err != nil {
+		return result, bounded(err)
+	}
+	var retireEntries []entry
+	seen := make(map[string]bool, len(retired))
+	if len(retired) > workloadrelease.MaxServices {
+		return result, ErrConflict
+	}
+	for _, old := range retired {
+		record := entry{SpecRole: old.Role, Name: old.Name, Action: "retire", Old: old}
+		spec, ok := operationSpec(stack, record)
+		if !ok || seen[old.Role] || old.Name != spec.Name || old.Installation != spec.Installation || !fullID.MatchString(old.ID) {
+			return result, ErrConflict
+		}
+		seen[old.Role] = true
+		retireEntries = append(retireEntries, record)
+	}
+	stack.Retired = retired
 	if err := e.Preflight(ctx, stack); err != nil {
 		return result, bounded(err)
 	}
@@ -157,8 +194,9 @@ func Apply(parent context.Context, e Engine, j Journal, stack Stack) (Result, er
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return result, ErrJournal
 	}
-	op := operation{Version: 1, ID: hex.EncodeToString(nonce[:]), Generation: stack.Generation}
-	gatewayChanged := false
+	op := operation{Version: 1, ID: hex.EncodeToString(nonce[:]), Generation: stack.Generation, Entries: retireEntries}
+	result.Changed = len(retireEntries) > 0
+	changed := make(map[string]bool, len(stack.Specs))
 	for _, s := range stack.Specs {
 		old, err := e.Inspect(ctx, s.Name, s)
 		if err != nil {
@@ -167,6 +205,7 @@ func Apply(parent context.Context, e Engine, j Journal, stack Stack) (Result, er
 		if old.ID != "" && (old.Installation != s.Installation || old.Role != s.Role) {
 			return result, ErrConflict
 		}
+		dependencyChanged := slices.ContainsFunc(s.DependsOn, func(name string) bool { return changed[name] })
 		action := "noop"
 		switch {
 		case old.ID == "":
@@ -175,13 +214,11 @@ func Apply(parent context.Context, e Engine, j Journal, stack Stack) (Result, er
 			action = "recreate"
 		case !old.Running:
 			action = "start"
-		case gatewayChanged:
+		case dependencyChanged:
 			action = "restart"
 		}
-		if s.Role == "gateway" {
-			gatewayChanged = action != "noop"
-		}
 		if action != "noop" {
+			changed[s.Role] = true
 			result.Changed = true
 		}
 		op.Entries = append(op.Entries, entry{SpecRole: s.Role, Name: s.Name, Action: action, Old: old})
@@ -206,9 +243,34 @@ func Apply(parent context.Context, e Engine, j Journal, stack Stack) (Result, er
 	}
 	for i := range op.Entries {
 		v := &op.Entries[i]
-		s, _ := specFor(stack, v.SpecRole)
+		s, _ := operationSpec(stack, *v)
 		if v.Action == "noop" {
 			continue
+		}
+		if v.Action == "retire" {
+			if err := e.Mutate(ctx, v.Old, "policy", "no"); err != nil {
+				return fail(err)
+			}
+			if err := e.Mutate(ctx, v.Old, "stop", ""); err != nil {
+				return fail(err)
+			}
+			continue
+		}
+		for _, dependency := range s.DependsOn {
+			upstream, ok := specFor(stack, dependency)
+			if !ok {
+				return fail(ErrConflict)
+			}
+			actual, err := e.Inspect(ctx, upstream.Name, upstream)
+			if err != nil {
+				return fail(err)
+			}
+			if actual.Installation != upstream.Installation || actual.Role != upstream.Role {
+				return fail(ErrConflict)
+			}
+			if !actual.Running || !actual.Healthy || !actual.Matches {
+				return fail(ErrHealth)
+			}
 		}
 		if v.Action == "recreate" {
 			if err := e.Mutate(ctx, v.Old, "policy", "no"); err != nil {
@@ -277,7 +339,7 @@ func rollback(ctx context.Context, e Engine, stack Stack, op *operation) error {
 		if v.Action == "noop" {
 			continue
 		}
-		s, _ := specFor(stack, v.SpecRole)
+		s, _ := operationSpec(stack, v)
 		current, err := e.Inspect(ctx, v.Name, s)
 		if err != nil {
 			return err
@@ -313,7 +375,7 @@ func rollback(ctx context.Context, e Engine, stack Stack, op *operation) error {
 		if err != nil {
 			return err
 		}
-		if current.ID != v.Old.ID {
+		if current.ID != v.Old.ID || current.Installation != s.Installation || current.Role != s.Role {
 			return ErrRecovery
 		}
 		if err := e.Mutate(ctx, current, "policy", v.Old.Policy); err != nil {
@@ -338,10 +400,27 @@ func rollback(ctx context.Context, e Engine, stack Stack, op *operation) error {
 
 func cleanup(ctx context.Context, e Engine, stack Stack, op *operation) error {
 	for _, v := range op.Entries {
+		if v.Action == "retire" {
+			spec, _ := operationSpec(stack, v)
+			old, err := e.Inspect(ctx, v.Name, spec)
+			if err != nil {
+				return err
+			}
+			if old.ID == "" {
+				continue
+			}
+			if old.ID != v.Old.ID || old.Installation != spec.Installation || old.Role != spec.Role || old.Running || old.Policy != "no" {
+				return ErrRecovery
+			}
+			if err := e.Mutate(ctx, old, "remove", ""); err != nil {
+				return err
+			}
+			continue
+		}
 		if v.Action != "recreate" {
 			continue
 		}
-		s, _ := specFor(stack, v.SpecRole)
+		s, _ := operationSpec(stack, v)
 		current, err := e.Inspect(ctx, v.Name, s)
 		if err != nil || current.ID != v.NewID {
 			return ErrRecovery

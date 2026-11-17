@@ -12,7 +12,7 @@ import (
 
 func testStack(t *testing.T) Stack {
 	t.Helper()
-	p, err := os.ReadFile("../backendprofile/testdata/profile-v3.json")
+	p, err := os.ReadFile("../backendprofile/testdata/profile-v4.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,9 +27,9 @@ func testStack(t *testing.T) Stack {
 	return stack
 }
 
-func TestFixedStackIsIsolatedAndHasOnlyResolvedImages(t *testing.T) {
+func TestManifestStackIsIsolatedAndHasOnlyResolvedImages(t *testing.T) {
 	s := testStack(t)
-	if len(s.Specs) != 3 || len(s.Volumes) != 8 {
+	if len(s.Specs) != 3 || len(s.Volumes) != 4 {
 		t.Fatal("wrong topology")
 	}
 	if s.Specs[1].Image != s.Specs[2].Image {
@@ -48,7 +48,7 @@ func TestFixedStackIsIsolatedAndHasOnlyResolvedImages(t *testing.T) {
 			}
 		}
 	}
-	if s.Specs[1].Mounts[2].ReadOnly != true || s.Specs[2].Mounts[2].ReadOnly != true {
+	if !s.Specs[1].Mounts[1].ReadOnly || !s.Specs[2].Mounts[1].ReadOnly {
 		t.Fatal("capability mount writable")
 	}
 	if len(s.Specs[1].Env) != 0 || len(s.Specs[2].Env) != 0 {
@@ -73,6 +73,7 @@ func (j *memoryJournal) Write(b []byte) error {
 type fakeEngine struct {
 	states     map[string]State
 	calls      []string
+	retired    []State
 	failRole   string
 	loseCreate bool
 	conflict   bool
@@ -80,7 +81,8 @@ type fakeEngine struct {
 	next       int
 }
 
-func fake() *fakeEngine { return &fakeEngine{states: map[string]State{}} }
+func fake() *fakeEngine                                               { return &fakeEngine{states: map[string]State{}} }
+func (f *fakeEngine) Retired(context.Context, Stack) ([]State, error) { return f.retired, nil }
 func (f *fakeEngine) Preflight(context.Context, Stack) error {
 	if f.conflict {
 		return ErrConflict
@@ -136,6 +138,7 @@ func (f *fakeEngine) Mutate(_ context.Context, s State, action, value string) er
 	return nil
 }
 func (f *fakeEngine) Wait(ctx context.Context, spec Spec, id string) error {
+	f.calls = append(f.calls, "wait:"+spec.Role)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -318,5 +321,43 @@ func TestAmbiguousOperationJournalIsRejected(t *testing.T) {
 	j.data = []byte(strings.Replace(string(j.data), `"Committed":false`, `"Committed":false,"Committed":true`, 1))
 	if _, err := Apply(context.Background(), fake(), j, s); !errors.Is(err, ErrJournal) {
 		t.Fatalf("ambiguous journal accepted: %v", err)
+	}
+}
+
+func TestRemovedServiceIsRetiredOrRestoredWithTransaction(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		name := "committed"
+		if fail {
+			name = "rolled back"
+		}
+		t.Run(name, func(t *testing.T) {
+			old := testStack(t)
+			e := fake()
+			journal := &memoryJournal{}
+			if _, err := Apply(t.Context(), e, journal, old); err != nil {
+				t.Fatal(err)
+			}
+			removed := e.states[old.Specs[2].Name]
+			next := old
+			next.Specs = append([]Spec(nil), old.Specs[:2]...)
+			e.retired = []State{removed}
+			if fail {
+				next.Specs[0].Env = map[string]string{"CHANGED": "value"}
+				e.failRole = next.Specs[0].Role
+			}
+			result, err := Apply(t.Context(), e, journal, next)
+			actual, present := e.states[removed.Name]
+			if fail {
+				if !errors.Is(err, ErrHealth) || !present || actual.ID != removed.ID ||
+					actual.Policy != removed.Policy || actual.Running != removed.Running {
+					t.Fatalf("rollback failed: %+v %v", actual, err)
+				}
+			} else if err != nil || !result.Applied || !result.Changed || present {
+				t.Fatalf("retirement failed: %+v %v", result, err)
+			}
+			if len(journal.data) != 0 {
+				t.Fatal("transaction left a journal")
+			}
+		})
 	}
 }

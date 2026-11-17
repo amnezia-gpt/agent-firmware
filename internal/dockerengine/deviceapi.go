@@ -2,8 +2,6 @@ package dockerengine
 
 import (
 	"context"
-	"regexp"
-	"strings"
 
 	"github.com/amnezia-gpt/agent-firmware/internal/workload"
 	"github.com/containerd/errdefs"
@@ -12,52 +10,39 @@ import (
 	"github.com/moby/moby/client"
 )
 
-var installationID = regexp.MustCompile(`^[a-f0-9]{32}$`)
-
-func validBindingProfile(s workload.Spec) bool {
-	if len(s.Bindings) == 0 {
-		return true
-	}
-	if s.Role != "gateway" || !installationID.MatchString(s.Installation) || len(s.Bindings) != 2 {
-		return false
-	}
-	base := workload.APIRuntimeDir(s.Installation)
-	return s.Bindings[0] == (workload.Binding{Source: base + "/api", Target: "/run/firmware-device-api", ReadOnly: true}) && s.Bindings[1] == (workload.Binding{Source: base + "/auth", Target: "/run/firmware-device-api-auth", ReadOnly: true})
-}
 func knownMount(s workload.Spec, m container.MountPoint) bool {
 	for _, expected := range s.Mounts {
 		if m.Type == mount.TypeVolume && m.Name == expected.Name && m.Destination == expected.Target {
 			return true
 		}
 	}
-	if !validBindingProfile(s) {
-		return false
-	}
-	for _, expected := range s.Bindings {
-		if m.Type == mount.TypeBind && m.Source == expected.Source && m.Destination == expected.Target && m.RW != expected.ReadOnly {
-			return true
-		}
-	}
 	return false
-}
-func (e *Engine) apiPrerequisites(parent context.Context) error {
-	ctx, cancel := context.WithTimeout(parent, e.callTimeout)
-	defer cancel()
-	info, err := e.api.Info(ctx, client.InfoOptions{})
-	if err != nil {
-		return classify(err)
-	}
-	for _, o := range info.Info.SecurityOptions {
-		if strings.Contains(o, "userns") || strings.Contains(o, "rootless") {
-			return ErrPrerequisites
-		}
-	}
-	return nil
 }
 
 // AnyVolumesExist is read-only; any retained identity or data forbids implicit
 // key initialization, even when a different volume has been removed.
 func (e *Engine) AnyVolumesExist(parent context.Context, s workload.Stack) (bool, error) {
+	// A previous manifest may have used other volume names. Look for any
+	// enrollment-owned data before checking collisions at the new names.
+	ctx, cancel := context.WithTimeout(parent, e.callTimeout)
+	list, err := e.api.VolumeList(ctx, client.VolumeListOptions{
+		Filters: make(client.Filters).Add("label", workload.LabelPrefix+"installation="+s.Installation),
+	})
+	cancel()
+	if err != nil {
+		return false, classify(err)
+	}
+	if len(list.Warnings) != 0 {
+		return false, workload.ErrEngine
+	}
+	for _, v := range list.Items {
+		if !owned(v.Labels, s.Installation, "volume") || v.Driver != "local" || len(v.Options) > 0 {
+			return false, workload.ErrConflict
+		}
+	}
+	if len(list.Items) > 0 {
+		return true, nil
+	}
 	for _, name := range s.Volumes {
 		ctx, cancel := context.WithTimeout(parent, e.callTimeout)
 		v, err := e.api.VolumeInspect(ctx, name, client.VolumeInspectOptions{})
@@ -76,15 +61,9 @@ func (e *Engine) AnyVolumesExist(parent context.Context, s workload.Stack) (bool
 	return false, nil
 }
 
-func creationUser(s workload.Spec) string {
-	if len(s.Bindings) > 0 {
-		return "65532:65532"
-	}
-	return ""
-}
 func effectiveUser(s workload.Spec, imageUser string) string {
-	if u := creationUser(s); u != "" {
-		return u
+	if s.User != "" {
+		return s.User
 	}
 	return imageUser
 }

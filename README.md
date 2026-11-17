@@ -3,17 +3,18 @@
 Go host supervisor for Amnezia devices. The first feature is tracked in
 [SELF-1](.agents/plans/SELF-1/ISSUE.md).
 
-The current executable validates and retains supplied configuration and applies
-the fixed Gateway, Codex agent and Codex storage stack through Docker's local
-Unix socket. The same binary offers continuous supervision with `serve`.
-The supplied-file installer installs that binary as a systemd service. Backend
-synchronization and signed OTA updates are not implemented yet.
+The firmware validates a schema 3 workload manifest and builds a stack from
+its services, digest-pinned images, environment and named volumes. The release
+and deployment entry points require a manifest for the Device API the binary
+serves. Device API v3 transport is tracked in
+[SELF-19](.agents/plans/SELF-19/ISSUE.md). The schema 3 fixtures can be validated
+locally while that transport and the matching workload release are prepared.
 
 With Go 1.27.4, run:
 
 ```sh
-go run ./cmd/agent-firmware validate-profile < internal/backendprofile/testdata/profile-v3.json
-go run ./cmd/agent-firmware validate --profile internal/backendprofile/testdata/profile-v3.json --release internal/workloadrelease/testdata/manifest.json
+go run ./cmd/agent-firmware validate-profile < internal/backendprofile/testdata/profile-v4.json
+go run ./cmd/agent-firmware validate --profile internal/backendprofile/testdata/profile-v4.json --release internal/workloadrelease/testdata/manifest.json
 ```
 
 Success writes `{"valid":true}` to stdout and exits 0. Failure writes a bounded
@@ -32,14 +33,14 @@ ES256/P-256 key structure. This does not authenticate an artifact publisher or
 prove the configured services are reachable. The first validator accepts ASCII
 URL hosts; Qt/internationalized-host equivalence is not claimed.
 
-The current image pin accepts the workload release or completed publication
-layout with schema version 2 and two digest-pinned images for `linux/amd64`.
-Firmware rejects earlier workload contract selectors, candidate publications
-and moving image references. The release pins the digest pair in
-[release/workload-release.json](release/workload-release.json).
-[SELF-21](.agents/plans/SELF-21/DESIGN.md) defines the next manifest format.
+The manifest can declare up to eight services, sixteen named volumes and
+thirty-two environment entries per service. The manifest and test vectors are
+specified in [SELF-21](.agents/plans/SELF-21/DESIGN.md). To check whether a
+validated manifest can be installed by the current binary, run
+`agent-firmware validate-release --release workload-release.json`.
+It checks the target platform and required Device API.
 
-To retain control-plane-supplied files with the built executable:
+With a deployable manifest, the built executable can retain the supplied files:
 
 ```sh
 sudo /tmp/agent-firmware configure --profile backend-profile.json --release workload-release.json
@@ -68,21 +69,20 @@ stored input fails without replacement. A directory-sync failure reports
 `state_commit_uncertain`: the new snapshot may already be visible. Inspect
 status before deciding how to recover. Abandoned temporary files are not adopted.
 
-Convergence uses the same writer lock as configure. It operates only on its own
-installation-prefixed containers, bridge and eight named volumes; client-owned
-resources are never adopted. Images use the supplied digest pair. Gateway starts
-before either runtime. No host port is published; runtime roots are read-only,
-capabilities are dropped, no-new-privileges is enabled, and image entrypoints
-and healthcheck commands are preserved. Runtime image users are retained.
-Gateway runs explicitly as UID/GID 65532:65532 for the local API boundary.
+Convergence uses the same writer lock as configure. It operates on owned
+containers, a private bridge and named volumes using an issuer-derived
+enrollment prefix. Services start after their declared dependencies are healthy.
+The firmware enforces no published ports or host mounts, dropped capabilities,
+no new privileges and a numeric non-root user. It preserves the image
+entrypoint and health check command.
 
 An unchanged healthy stack is a NoOp. Stopped containers start in place and supported drift causes a
 replacement. Actual image/config/mount/network/security settings are compared
 along with ownership labels. Unexpected mounts, foreign names or resource
 ownership are conflicts. A private bridge retains required outbound access.
 
-For replacement, firmware keeps stopped old containers with automatic restart
-disabled until the whole group passes health/final verification. A private
+For replacement or retirement, firmware keeps stopped old containers with
+automatic restart disabled until the new stack passes health and verification. A private
 atomic journal lets a later convergence cycle recover after process interruption.
 Configure refuses updates while recovery is pending. Failed application restores
 prior IDs/names, restart policies and running state; committed backup-cleanup
@@ -90,7 +90,9 @@ failure is reported separately. No apply/rollback path deletes or rewinds volume
 Images, network and new owned volumes can remain after failed first bootstrap.
 
 Forward work is bounded to 15 minutes, pulls to 3 minutes each, API calls to
-15 seconds (stop calls to 30), and health waits to 60/150 seconds. Cancellation
+15 seconds for ordinary requests. Stop calls use the configured grace period
+with time for the engine response. Health waits use the manifest's start
+period plus 90 seconds, within the overall convergence deadline. Cancellation
 allows up to 2 minutes for recovery. A timeout does not prove a Docker mutation
 had no effect. `recovery_required` or `backup_cleanup_pending` retains the
 journal for the next convergence cycle. Configuration, credentials and
@@ -180,28 +182,19 @@ Profile assembly is also available on its own and changes nothing on the host:
 agent-firmware discover-profile --issuer https://auth.example > backend-profile.json
 ```
 
-Discovery uses HTTPS only and follows no redirects: RFC 8414 metadata at the
-issuer (compared exactly; an issuer with a path is refused), its
-`protected_resources`, each resource's RFC 9728 document (`resource` equal to
-the identifier, the issuer among `authorization_servers`), the resources whose
-`scopes_supported` hold `responses:create` and `device.connectivity:create`,
-and the public ES256 signature keys of `jwks_uri` as the pinned ingress trust
-bundle. The profile ID is the issuer host. The bundle is read once at
-installation; a later key rotation needs a new installation.
+Discovery uses HTTPS without redirects. It verifies the issuer in RFC 8414
+metadata and verifies each RFC 9728 resource identifier and its authorization
+server. It retains the verified resources and their scopes in the profile.
+When building a stack, the firmware resolves each scope requested by the
+manifest to exactly one resource. An update may refresh the resource list once
+for a missing scope. The signing keys pinned at enrollment are retained.
 
-A release is a pushed tag `v*`: `.github/workflows/release.yml` tests, runs
-`scripts/build-release.sh` and publishes three assets — the stamped script, the
-linux/amd64 binary and `workload-release.json` (the file committed under
-`release/`, see `release/README.md`). The enrollment page points at
-`https://github.com/amnezia-gpt/agent-firmware/releases/latest/download/agent-firmware-install.sh`,
-so a release changes nothing outside this repository. The script fetches the
-binary and the workload release of its own tag and checks the stamped digests.
-Trust rests on TLS and on who can publish a release here; independent publisher
-signatures are not implemented. Try the build locally with:
-
-```sh
-WORKLOAD_RELEASE=internal/workloadrelease/testdata/manifest.json sh scripts/build-release.sh v0.0.0 /tmp/agent-firmware-release
-```
+A pushed `v*` tag triggers release CI. CI downloads the selected published
+workload manifest from `WORKLOAD_MANIFEST_URL` and compares it byte for byte
+with [the repository pin](release/workload-release.json). Asset generation also
+requires the firmware to serve the manifest's API. The installer script checks
+the stamped digests of the binary and the same manifest before executing.
+See [release preparation](release/README.md).
 
 Local checks:
 

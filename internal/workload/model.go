@@ -1,14 +1,18 @@
-// Package workload owns the fixed device stack and its container transaction.
+// Package workload resolves the manifest and owns the container transaction.
 package workload
 
 import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
+	"slices"
+	"strings"
 
+	"github.com/amnezia-gpt/agent-firmware/internal/backendprofile"
 	"github.com/amnezia-gpt/agent-firmware/internal/configuration"
-	"github.com/amnezia-gpt/agent-firmware/internal/host"
+	"github.com/amnezia-gpt/agent-firmware/internal/workloadrelease"
 )
 
 const Manager = "agent-firmware"
@@ -34,17 +38,13 @@ type Mount struct {
 	Name, Target string
 	ReadOnly     bool
 }
-type Binding struct {
-	Source, Target string
-	ReadOnly       bool
-}
 type Spec struct {
-	Installation, Role, Name, Image, Network, Alias string
-	Env                                             map[string]string
-	Mounts                                          []Mount
-	Bindings                                        []Binding `json:",omitempty"`
-	ReadOnly                                        bool
-	HealthStart, StopSeconds                        int
+	Installation, Role, Name, Image, Network, User string
+	Aliases, DependsOn                             []string
+	Env                                            map[string]string
+	Mounts                                         []Mount
+	ReadOnly                                       bool
+	HealthStart, StopSeconds                       int
 }
 
 func (s Spec) Hash() string {
@@ -57,42 +57,93 @@ type Stack struct {
 	Installation, Generation, Network string
 	Volumes                           []string
 	Specs                             []Spec
+	DeviceAPI                         string
+	Client                            workloadrelease.APIClient
+	Retired                           []State
+}
+
+func EnrollmentID(issuer string) string {
+	sum := sha256.Sum256([]byte("urn:agent-firmware:enrollment:v1\n" + issuer))
+	return hex.EncodeToString(sum[:16])
 }
 
 func FromReaders(p, r io.Reader) (Stack, error) {
-	i, err := configuration.Parse(p, r)
+	input, err := configuration.Parse(p, r)
 	if err != nil {
 		return Stack{}, err
 	}
-	return FromInput(i), nil
-}
-func FromInput(input *configuration.Input) Stack {
-	p, r := input.Profile(), input.Release()
-	// Keep the current stack namespace until the manifest and its enrollment
-	// namespace change together.
-	sum := sha256.Sum256([]byte("urn:amnezia-gpt:workload-contract:device:v1\n" + p.ID + "\n" + p.AuthIssuer))
-	id := hex.EncodeToString(sum[:16])
-	prefix := "af-" + id
-	volume := func(role string) string { return prefix + "-" + role }
-	stack := Stack{Installation: id, Generation: input.Generation(), Network: prefix + "-net"}
-	for _, v := range []string{"identity", "gateway-state", "agent-home", "agent-workspace", "agent-auth", "storage-home", "storage-workspace", "storage-auth"} {
-		stack.Volumes = append(stack.Volumes, volume(v))
-	}
-	stack.Specs = []Spec{
-		{Installation: id, Role: "gateway", Name: prefix + "-gateway", Image: r.GatewayImage, Network: stack.Network, Alias: "amgpt-device-gateway", HealthStart: 5, StopSeconds: 15,
-			Env:    map[string]string{"AMGPT_AUTH_ISSUER": p.AuthIssuer, "AMGPT_ROUTER_BASE_URL": p.RouterBaseURL, "AMGPT_RUNTIME_GATEWAY_BASE_URL": p.RuntimeGatewayBaseURL, "AMGPT_INGRESS_TRUST_BUNDLE": p.IngressTrustBundle, "AMGPT_INGRESS_TRUST_SHA256": p.IngressTrustSHA256, "AMGPT_DEVICE_IDENTITY_DIR": "/var/lib/amgpt-device-identity", "AMGPT_DEVICE_GATEWAY_STATE_DIR": "/var/lib/amgpt-device-gateway", "AMGPT_INGRESS_STATE_DIR": "/var/lib/amgpt-device-gateway/ingress", "AMGPT_CODEX_STORAGE_APP_URL": "ws://codex-storage:4500", "AMGPT_CODEX_STORAGE_APP_AUTH_DIR": "/run/amgpt-codex-storage"},
-			Mounts: []Mount{{volume("identity"), "/var/lib/amgpt-device-identity", false}, {volume("gateway-state"), "/var/lib/amgpt-device-gateway", false}, {volume("agent-auth"), "/run/amgpt-codex", false}, {volume("storage-auth"), "/run/amgpt-codex-storage", false}}},
-		{Installation: id, Role: "agent", Name: prefix + "-agent", Image: r.CodexImage, Network: stack.Network, Alias: "codex-app-server", ReadOnly: true, HealthStart: 60, StopSeconds: 20, Mounts: []Mount{{volume("agent-home"), "/home/codex/.codex", false}, {volume("agent-workspace"), "/codex-workspace", false}, {volume("agent-auth"), "/run/amgpt-codex", true}}},
-		{Installation: id, Role: "storage", Name: prefix + "-storage", Image: r.CodexImage, Network: stack.Network, Alias: "codex-storage", ReadOnly: true, HealthStart: 60, StopSeconds: 20, Mounts: []Mount{{volume("storage-home"), "/home/codex/.codex", false}, {volume("storage-workspace"), "/codex-workspace", false}, {volume("storage-auth"), "/run/amgpt-codex", true}}},
-	}
-	gateway := &stack.Specs[0]
-	gateway.Env["FIRMWARE_DEVICE_API_MODE"] = "required"
-	gateway.Env["FIRMWARE_DEVICE_API_SOCKET"] = "/run/firmware-device-api/socket"
-	gateway.Env["FIRMWARE_DEVICE_API_TOKEN_FILE"] = "/run/firmware-device-api-auth/token"
-	gateway.Bindings = []Binding{{APIRuntimeDir(id) + "/api", "/run/firmware-device-api", true}, {APIRuntimeDir(id) + "/auth", "/run/firmware-device-api-auth", true}}
-	return stack
+	return FromInput(input)
 }
 
-func APIRuntimeDir(installation string) string {
-	return host.DefaultLayout().InstallationRuntime(installation)
+func FromInput(input *configuration.Input) (Stack, error) {
+	profile, release := input.Profile(), input.Release()
+	resolved, err := resolveScopes(profile, release.ResourceScopes())
+	if err != nil {
+		return Stack{}, err
+	}
+	id := EnrollmentID(profile.AuthIssuer)
+	prefix := "af-" + id + "-"
+	stack := Stack{
+		Installation: id, Generation: input.Generation(), Network: prefix + "net",
+		DeviceAPI: release.DeviceAPI, Client: release.Client,
+	}
+	volumes := slices.Clone(release.Volumes)
+	slices.Sort(volumes)
+	for _, volume := range volumes {
+		stack.Volumes = append(stack.Volumes, prefix+volume)
+	}
+	for _, name := range release.Order() {
+		service := release.Services[name]
+		spec := Spec{
+			Installation: id, Role: name, Name: prefix + name, Image: service.Image.Reference(),
+			Network: stack.Network, User: service.User, ReadOnly: service.ReadOnly,
+			HealthStart: service.HealthStart, StopSeconds: service.StopGrace,
+			Aliases: slices.Clone(service.Aliases), DependsOn: slices.Clone(service.DependsOn),
+			Env: make(map[string]string, len(service.Environment)),
+		}
+		slices.Sort(spec.Aliases)
+		slices.Sort(spec.DependsOn)
+		for key, value := range service.Environment {
+			switch value.From {
+			case "issuer":
+				spec.Env[key] = profile.AuthIssuer
+			case "trust_bundle":
+				spec.Env[key] = profile.IngressTrustBundle
+			case "trust_bundle_sha256":
+				spec.Env[key] = profile.IngressTrustSHA256
+			case "resource":
+				spec.Env[key] = resolved[value.Scope]
+			default:
+				spec.Env[key] = value.Value
+			}
+		}
+		for _, volume := range service.Volumes {
+			spec.Mounts = append(spec.Mounts, Mount{prefix + volume.Source, volume.Target, volume.ReadOnly})
+		}
+		slices.SortFunc(spec.Mounts, func(a, b Mount) int { return strings.Compare(a.Target, b.Target) })
+		stack.Specs = append(stack.Specs, spec)
+	}
+	return stack, nil
+}
+
+// A known ambiguity takes precedence over a missing scope. An update must
+// never use a resource refresh to choose between competing identifiers.
+func resolveScopes(profile backendprofile.Profile, scopes []string) (map[string]string, error) {
+	resolved := make(map[string]string, len(scopes))
+	missing := false
+	for _, scope := range scopes {
+		resource, err := profile.ResolveScope(scope)
+		if errors.Is(err, backendprofile.ErrScopeMissing) {
+			missing = true
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		resolved[scope] = resource
+	}
+	if missing {
+		return nil, backendprofile.ErrScopeMissing
+	}
+	return resolved, nil
 }

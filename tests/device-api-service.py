@@ -37,6 +37,9 @@ def main():
     if not args.image.startswith("sha256:") or len(args.image) != 71:
         raise SystemExit("existing pinned local image required")
     repository = Path(__file__).resolve().parent.parent
+    release_path = repository / "internal/workloadrelease/testdata/manifest.json"
+    if run(args.firmware, "validate-release", "--release", str(release_path), check=False).returncode:
+        raise SystemExit("the supplied firmware cannot run the test workload manifest")
     root = Path(tempfile.mkdtemp(prefix="af-api-service-", dir="/run"))
     state = root / "state"
     state.mkdir(mode=0o700)
@@ -44,10 +47,10 @@ def main():
     firmware = payload / "firmware"
     shutil.copyfile(args.firmware, firmware)
     firmware.chmod(0o755)
-    profile = json.loads((repository / "internal/backendprofile/testdata/profile-v3.json").read_text())
+    profile = json.loads((repository / "internal/backendprofile/testdata/profile-v4.json").read_text())
     profile["backend_profile"] = "api-check-" + uuid.uuid4().hex[:16]
-    installation = hashlib.sha256(("urn:amnezia-gpt:workload-contract:device:v1\n" +
-                                  profile["backend_profile"] + "\n" + profile["auth_issuer"]).encode()).hexdigest()[:32]
+    installation = hashlib.sha256(("urn:agent-firmware:enrollment:v1\n" +
+                                  profile["auth_issuer"]).encode()).hexdigest()[:32]
     network = "af-" + installation + "-net"
     unit = "af-api-check-" + installation
     runtime = Path("/run/agent-firmware") / installation
@@ -55,8 +58,6 @@ def main():
     try:
         profile_path = root / "profile.json"
         profile_path.write_text(json.dumps(profile))
-        release_path = repository / "internal/workloadrelease/testdata/manifest.json"
-
         def configure(directory, check=True):
             return run(str(firmware), "configure", "--state-dir", str(directory),
                        "--profile", str(profile_path), "--release", str(release_path), check=check)

@@ -72,6 +72,12 @@ the root secret disappeared. The installer tests checked the generated credentia
   fails as `keystore_unavailable` at the state boundary. [SELF-17](../SELF-17/ISSUE.md) adds a distinct installer
   diagnostic for an earlier layout.
 
+## Where The Pending Check Runs
+
+The remaining criterion (the unit starts under systemd without credential directives) is checked with the binary
+built from commit `5f5450f`. Later commits accept only a schema 3 manifest and cannot converge a stack until
+SELF-19, so the check cannot be made on a later branch.
+
 ## Next Action
 
 Verify service startup under systemd on a selected disposable host. The isolated container runs tested the service

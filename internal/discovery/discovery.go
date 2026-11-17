@@ -22,15 +22,12 @@ import (
 
 	"github.com/amnezia-gpt/agent-firmware/internal/backendprofile"
 	"github.com/amnezia-gpt/agent-firmware/internal/strictjson"
+	"github.com/amnezia-gpt/agent-firmware/internal/workloadrelease"
 )
 
 const (
-	maxBody      = 256 << 10
-	maxResources = 16
-	maxKeys      = 8
-
-	routerScope  = "responses:create"
-	runtimeScope = "device.connectivity:create"
+	maxBody = 256 << 10
+	maxKeys = 8
 
 	serverWellKnown   = "/.well-known/oauth-authorization-server"
 	resourceWellKnown = "/.well-known/oauth-protected-resource"
@@ -62,75 +59,22 @@ func NewClient() *http.Client {
 	return &http.Client{Transport: transport}
 }
 
-// Profile returns a backend profile v3 document for the issuer. The result is
-// deterministic for unchanged metadata, so a repeated installation is a NoOp.
+// Profile records protected resources and pins the issuer's signing keys once.
 func Profile(ctx context.Context, client *http.Client, issuer string) ([]byte, error) {
-	base, ok := identifier(issuer)
-	// RFC 8414 §3.1 places the well-known segment before an issuer path; an
-	// issuer with a path is not supported here, and the comparison is exact (§3.3).
-	if !ok || base.Path != "" || issuer != "https://"+base.Host || base.Host != strings.ToLower(base.Host) {
-		return nil, ErrIssuer
-	}
-	bounded := *client
-	bounded.Timeout = 20 * time.Second
-	bounded.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-
-	metadata, err := get(ctx, &bounded, issuer+serverWellKnown)
+	bounded := discoveryClient(client)
+	host, server, err := serverMetadata(ctx, bounded, issuer)
 	if err != nil {
-		return nil, ErrUnavailable
+		return nil, err
 	}
-	server, ok := strictjson.Members(metadata)
-	if !ok || strictjson.StringField(server, "issuer") != issuer {
-		return nil, ErrMetadata
-	}
-	resources, ok := stringList(server["protected_resources"])
-	if !ok || len(resources) < 1 || len(resources) > maxResources {
-		return nil, ErrMetadata
+	resources, err := discoverResources(ctx, bounded, issuer, server)
+	if err != nil {
+		return nil, err
 	}
 	keysURL := strictjson.StringField(server, "jwks_uri")
 	if _, ok := identifier(keysURL); !ok {
 		return nil, ErrMetadata
 	}
-
-	var router, runtime []string
-	unreachable := false
-	seen := map[string]bool{}
-	for _, resource := range resources {
-		location, ok := identifier(resource)
-		if !ok || seen[resource] {
-			return nil, ErrMetadata
-		}
-		seen[resource] = true
-		document, err := get(ctx, &bounded, "https://"+location.Host+resourceWellKnown+strings.TrimSuffix(location.EscapedPath(), "/"))
-		if err != nil {
-			unreachable = true
-			continue
-		}
-		// A resource that does not name itself and this issuer is not ours to use (RFC 9728 §3.3).
-		fields, ok := strictjson.Members(document)
-		if !ok || strictjson.StringField(fields, "resource") != resource {
-			continue
-		}
-		servers, ok := stringList(fields["authorization_servers"])
-		if !ok || !contains(servers, issuer) {
-			continue
-		}
-		scopes, _ := stringList(fields["scopes_supported"])
-		if contains(scopes, routerScope) {
-			router = append(router, resource)
-		}
-		if contains(scopes, runtimeScope) {
-			runtime = append(runtime, resource)
-		}
-	}
-	if len(router) != 1 || len(runtime) != 1 || router[0] == runtime[0] {
-		if unreachable && len(router) <= 1 && len(runtime) <= 1 {
-			return nil, ErrUnavailable
-		}
-		return nil, ErrResources
-	}
-
-	set, err := get(ctx, &bounded, keysURL)
+	set, err := get(ctx, bounded, keysURL)
 	if err != nil {
 		return nil, ErrUnavailable
 	}
@@ -139,23 +83,106 @@ func Profile(ctx context.Context, client *http.Client, issuer string) ([]byte, e
 		return nil, ErrKeys
 	}
 	digest := sha256.Sum256(bundle)
-	profile, err := json.Marshal(struct {
-		SchemaVersion int    `json:"schema_version"`
-		ID            string `json:"backend_profile"`
-		Issuer        string `json:"auth_issuer"`
-		Router        string `json:"router_base_url"`
-		Runtime       string `json:"runtime_gateway_base_url"`
-		Bundle        string `json:"ingress_trust_bundle"`
-		Pin           string `json:"ingress_trust_sha256"`
-	}{3, ProfileID(base.Hostname()), issuer, router[0], runtime[0], string(bundle), hex.EncodeToString(digest[:])})
+	return encodeProfile(backendprofile.Profile{
+		ID: ProfileID(host), AuthIssuer: issuer, Resources: resources,
+		IngressTrustBundle: string(bundle), IngressTrustSHA256: hex.EncodeToString(digest[:]),
+	})
+}
+
+// RefreshResources refreshes only resource metadata. The trust bundle and its
+// pin retain the exact bytes from enrollment.
+func RefreshResources(ctx context.Context, client *http.Client, profile backendprofile.Profile) ([]byte, error) {
+	bounded := discoveryClient(client)
+	_, server, err := serverMetadata(ctx, bounded, profile.AuthIssuer)
+	if err != nil {
+		return nil, err
+	}
+	profile.Resources, err = discoverResources(ctx, bounded, profile.AuthIssuer, server)
+	if err != nil {
+		return nil, err
+	}
+	return encodeProfile(profile)
+}
+
+func discoveryClient(client *http.Client) *http.Client {
+	bounded := *client
+	bounded.Timeout = 20 * time.Second
+	bounded.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &bounded
+}
+
+func serverMetadata(ctx context.Context, client *http.Client, issuer string) (string, map[string]json.RawMessage, error) {
+	base, ok := identifier(issuer)
+	// RFC 8414 §3.1 places the well-known segment before an issuer path; an
+	// issuer with a path is not supported here, and the comparison is exact (§3.3).
+	if !ok || base.Path != "" || issuer != "https://"+base.Host || base.Host != strings.ToLower(base.Host) {
+		return "", nil, ErrIssuer
+	}
+	metadata, err := get(ctx, client, issuer+serverWellKnown)
+	if err != nil {
+		return "", nil, ErrUnavailable
+	}
+	server, ok := strictjson.Members(metadata)
+	if !ok || strictjson.StringField(server, "issuer") != issuer {
+		return "", nil, ErrMetadata
+	}
+	return base.Hostname(), server, nil
+}
+
+func discoverResources(ctx context.Context, client *http.Client, issuer string, server map[string]json.RawMessage) ([]backendprofile.Resource, error) {
+	resources, ok := stringList(server["protected_resources"])
+	if !ok && server["protected_resources"] != nil || len(resources) > backendprofile.MaxResources {
+		return nil, ErrMetadata
+	}
+	retained := make([]backendprofile.Resource, 0, len(resources))
+	seen := map[string]bool{}
+	sort.Strings(resources)
+	for _, resource := range resources {
+		location, ok := identifier(resource)
+		if !ok || seen[resource] {
+			return nil, ErrMetadata
+		}
+		seen[resource] = true
+		document, err := get(ctx, client, "https://"+location.Host+resourceWellKnown+strings.TrimSuffix(location.EscapedPath(), "/"))
+		if err != nil {
+			return nil, ErrUnavailable
+		}
+		fields, ok := strictjson.Members(document)
+		if !ok || strictjson.StringField(fields, "resource") != resource {
+			return nil, ErrResources
+		}
+		servers, ok := stringList(fields["authorization_servers"])
+		if !ok || !contains(servers, issuer) {
+			return nil, ErrResources
+		}
+		scopes, ok := stringList(fields["scopes_supported"])
+		if !ok {
+			if fields["scopes_supported"] != nil {
+				return nil, ErrMetadata
+			}
+			scopes = []string{}
+		}
+		sort.Strings(scopes)
+		for i, scope := range scopes {
+			if !workloadrelease.ValidScope(scope) || i > 0 && scopes[i-1] == scope {
+				return nil, ErrMetadata
+			}
+		}
+		retained = append(retained, backendprofile.Resource{Identifier: resource, Scopes: scopes})
+	}
+	return retained, nil
+}
+
+func encodeProfile(profile backendprofile.Profile) ([]byte, error) {
+	data, err := backendprofile.Encode(profile)
 	if err != nil {
 		return nil, ErrProfile
 	}
-	profile = append(profile, '\n')
-	if _, err := backendprofile.Parse(bytes.NewReader(profile)); err != nil {
+	data = append(data, '\n')
+	if _, err := backendprofile.Parse(bytes.NewReader(data)); err != nil {
 		return nil, ErrProfile
 	}
-	return profile, nil
+	return data, nil
 }
 
 // ProfileID derives the opaque profile ID from the issuer host: the host itself
@@ -256,8 +283,13 @@ func get(ctx context.Context, client *http.Client, location string) ([]byte, err
 
 func stringList(raw json.RawMessage) ([]string, bool) {
 	var values []string
-	if raw == nil || json.Unmarshal(raw, &values) != nil {
+	if raw == nil || json.Unmarshal(raw, &values) != nil || values == nil {
 		return nil, false
+	}
+	for _, value := range values {
+		if value == "" {
+			return nil, false
+		}
 	}
 	return values, true
 }

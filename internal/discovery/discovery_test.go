@@ -13,8 +13,10 @@ import (
 )
 
 const (
-	keyX = "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY"
-	keyY = "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"
+	routerScope  = "example:primary"
+	runtimeScope = "example:secondary"
+	keyX         = "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY"
+	keyY         = "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"
 )
 
 // backend serves the documents of one issuer; a test replaces single documents.
@@ -76,8 +78,13 @@ func TestProfileIsAssembledFromStandardMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	issuer := b.server.URL
-	if profile.AuthIssuer != issuer || profile.RouterBaseURL != issuer+"/v1" || profile.RuntimeGatewayBaseURL != issuer {
-		t.Fatalf("unexpected coordinates: %+v", profile)
+	if profile.AuthIssuer != issuer || len(profile.Resources) != 3 {
+		t.Fatalf("unexpected profile: %+v", profile)
+	}
+	for scope, want := range map[string]string{routerScope: issuer + "/v1", runtimeScope: issuer, "runtime.tools:execute": issuer + "/mcp"} {
+		if got, err := profile.ResolveScope(scope); err != nil || got != want {
+			t.Fatalf("unexpected resource: %s %v", got, err)
+		}
 	}
 	if !strings.HasPrefix(profile.ID, "issuer-") {
 		t.Fatalf("profile ID %q", profile.ID)
@@ -136,9 +143,6 @@ func TestUntrustedDocumentsAreRejected(t *testing.T) {
 		{"duplicate member", func(b *backend, issuer string) {
 			b.pages[serverWellKnown] = `{"issuer":"https://other.example",` + b.pages[serverWellKnown][1:]
 		}, ErrMetadata},
-		{"no resources", func(b *backend, issuer string) {
-			b.pages[serverWellKnown] = `{"issuer":"` + issuer + `","jwks_uri":"` + issuer + `/oauth/jwks"}`
-		}, ErrMetadata},
 		{"plain http resource", func(b *backend, issuer string) {
 			b.pages[serverWellKnown] = strings.Replace(b.pages[serverWellKnown], `"`+issuer+`/mcp"`, `"http://plain.example/mcp"`, 1)
 		}, ErrMetadata},
@@ -151,13 +155,6 @@ func TestUntrustedDocumentsAreRejected(t *testing.T) {
 		{"resource does not trust the issuer", func(b *backend, issuer string) {
 			b.pages[resourceWellKnown] = resource(issuer, "https://other.example", runtimeScope)
 		}, ErrResources},
-		{"two resources claim one role", func(b *backend, issuer string) {
-			b.pages[resourceWellKnown+"/mcp"] = resource(issuer+"/mcp", issuer, routerScope)
-		}, ErrResources},
-		{"one resource claims both roles", func(b *backend, issuer string) {
-			b.pages[resourceWellKnown+"/v1"] = resource(issuer+"/v1", issuer, routerScope, runtimeScope)
-			b.pages[resourceWellKnown] = resource(issuer, issuer, "device.connectivity:delete")
-		}, ErrResources},
 		{"needed resource unreachable", func(b *backend, _ string) { delete(b.pages, resourceWellKnown) }, ErrUnavailable},
 		{"key set missing", func(b *backend, _ string) { delete(b.pages, "/oauth/jwks") }, ErrUnavailable},
 		{"no ingress-shaped key", func(b *backend, _ string) {
@@ -168,10 +165,6 @@ func TestUntrustedDocumentsAreRejected(t *testing.T) {
 		}, ErrKeys},
 		{"invalid point", func(b *backend, _ string) {
 			b.pages["/oauth/jwks"] = strings.Replace(b.pages["/oauth/jwks"], keyY, keyX, 1)
-		}, ErrProfile},
-		{"router outside /v1", func(b *backend, issuer string) {
-			b.pages[serverWellKnown] = strings.Replace(b.pages[serverWellKnown], `"`+issuer+`/v1"`, `"`+issuer+`/api"`, 1)
-			b.pages[resourceWellKnown+"/api"] = resource(issuer+"/api", issuer, routerScope)
 		}, ErrProfile},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -188,10 +181,38 @@ func TestUntrustedDocumentsAreRejected(t *testing.T) {
 	}
 }
 
-func TestAnUnusedUnreachableResourceDoesNotBlock(t *testing.T) {
+func TestIncompleteResourcesAreNotRetained(t *testing.T) {
 	b := newBackend(t)
 	delete(b.pages, resourceWellKnown+"/mcp")
-	if _, err := b.profile(); err != nil {
+	if _, err := b.profile(); err != ErrUnavailable {
+		t.Fatalf("missing advertised resource: %v", err)
+	}
+}
+
+func TestRefreshPreservesPinnedKeysAndRetainsAmbiguousScopes(t *testing.T) {
+	b := newBackend(t)
+	initial, err := b.profile()
+	if err != nil {
 		t.Fatal(err)
+	}
+	profile, err := backendprofile.Parse(bytes.NewReader(initial))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.pages[resourceWellKnown+"/mcp"] = resource(b.server.URL+"/mcp", b.server.URL, routerScope)
+	delete(b.pages, "/oauth/jwks")
+	refreshed, err := RefreshResources(t.Context(), b.server.Client(), profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := backendprofile.Parse(bytes.NewReader(refreshed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.IngressTrustBundle != profile.IngressTrustBundle || next.IngressTrustSHA256 != profile.IngressTrustSHA256 || b.hits["/oauth/jwks"] != 1 {
+		t.Fatal("refresh changed the pinned trust")
+	}
+	if _, err := next.ResolveScope(routerScope); err != backendprofile.ErrScopeAmbiguous {
+		t.Fatalf("ambiguous scope: %v", err)
 	}
 }

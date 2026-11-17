@@ -1,13 +1,20 @@
 # Workload release pinned by the firmware
 
-`workload-release.json` in this directory is the release manifest of the
-workloads this firmware version installs. The current two-image layout uses
-schema version 2 with its digest references copied from the chosen workloads
-release. The firmware selects one execution path and the pin has no workload
-contract selector. The release workflow validates it
-with the firmware of the same revision and publishes it beside the binary.
+The release job requires a published schema 3 workload release manifest and
+a firmware binary that serves the Device API the manifest declares. The checked
+in pin in this worktree is from the preceding step. Replacing it requires the
+matching publication from the workload producer.
 
-To ship other workload images to new installations, replace the file with the
-digest pair and provenance fields of the new workload release, commit, and tag
-a firmware release. Schema 3 is tracked by [SELF-21](../.agents/plans/SELF-21/ISSUE.md).
-The file holds only public image names, digests, a version and a revision.
+Configure `WORKLOAD_MANIFEST_URL` for the exact published manifest asset.
+The workflow downloads it over HTTPS and compares its bytes with
+`release/workload-release.json` before building release assets. Store the
+published file verbatim. Preserve its whitespace and final newline.
+
+The release script also runs `agent-firmware validate-release`. The check
+covers schema, target platform and runtime Device API compatibility. The
+published release carries the original manifest bytes and the installation
+script uses the SHA-256 of those bytes.
+
+The accepted schema and fixtures are tracked in
+[SELF-21](../.agents/plans/SELF-21/DESIGN.md). Device API v3 transport is
+tracked in [SELF-19](../.agents/plans/SELF-19/ISSUE.md).

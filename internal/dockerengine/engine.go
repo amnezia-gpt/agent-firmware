@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/amnezia-gpt/agent-firmware/internal/workload"
+	"github.com/amnezia-gpt/agent-firmware/internal/workloadrelease"
 	"github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
@@ -117,14 +118,16 @@ func (e *Engine) network(ctx context.Context, s workload.Stack, create bool) err
 	if n.Name != s.Network || !owned(n.Labels, s.Installation, "network") || n.Driver != "bridge" || n.Internal || n.Ingress || len(n.Options) > 0 {
 		return workload.ErrConflict
 	}
-	for _, endpoint := range n.Containers {
+	for id, endpoint := range n.Containers {
 		found := false
 		for _, spec := range s.Specs {
 			if endpoint.Name == spec.Name {
 				found = true
 			}
 		}
-		if !found {
+		if !found && !slices.ContainsFunc(s.Retired, func(old workload.State) bool {
+			return old.ID == id && old.Name == endpoint.Name
+		}) {
 			return workload.ErrConflict
 		}
 	}
@@ -160,17 +163,46 @@ func (e *Engine) volumes(ctx context.Context, s workload.Stack, create bool) err
 	}
 	return nil
 }
-func (e *Engine) Preflight(ctx context.Context, s workload.Stack) error {
-	for _, spec := range s.Specs {
-		if !validBindingProfile(spec) {
-			return workload.ErrConflict
-		}
-		if len(spec.Bindings) > 0 {
-			if err := e.apiPrerequisites(ctx); err != nil {
-				return err
-			}
-		}
+
+// Retired finds only containers with this enrollment's ownership labels.
+// Existing journals are recovered before listing, so backups are never adopted.
+func (e *Engine) Retired(ctx context.Context, stack workload.Stack) ([]workload.State, error) {
+	call, cancel := context.WithTimeout(ctx, e.callTimeout)
+	list, err := e.api.ContainerList(call, client.ContainerListOptions{
+		All: true, Limit: workloadrelease.MaxServices + 1,
+		Filters: make(client.Filters).Add("label", workload.LabelPrefix+"installation="+stack.Installation),
+	})
+	cancel()
+	if err != nil {
+		return nil, classify(err)
 	}
+	if len(list.Items) > workloadrelease.MaxServices {
+		return nil, workload.ErrConflict
+	}
+	var retired []workload.State
+	for _, container := range list.Items {
+		role := container.Labels[workload.LabelPrefix+"role"]
+		name := "af-" + stack.Installation + "-" + role
+		if !owned(container.Labels, stack.Installation, role) || !slices.Contains(container.Names, "/"+name) {
+			return nil, workload.ErrConflict
+		}
+		if slices.ContainsFunc(stack.Specs, func(s workload.Spec) bool { return s.Role == role }) {
+			continue
+		}
+		actual, err := e.Inspect(ctx, container.ID, workload.Spec{})
+		if err != nil {
+			return nil, err
+		}
+		if actual.ID != container.ID || actual.Name != name || actual.Installation != stack.Installation || actual.Role != role {
+			return nil, workload.ErrConflict
+		}
+		retired = append(retired, actual)
+	}
+	slices.SortFunc(retired, func(a, b workload.State) int { return strings.Compare(a.Name, b.Name) })
+	return retired, nil
+}
+
+func (e *Engine) Preflight(ctx context.Context, s workload.Stack) error {
 	if err := e.network(ctx, s, false); err != nil {
 		return err
 	}
@@ -192,8 +224,8 @@ func (e *Engine) Preflight(ctx context.Context, s workload.Stack) error {
 		if identity.Installation != spec.Installation || identity.Role != spec.Role || actual.HostConfig == nil || actual.Config == nil || actual.NetworkSettings == nil {
 			return workload.ErrConflict
 		}
-		repository, _, _ := strings.Cut(spec.Image, "@")
-		if !strings.HasPrefix(actual.Config.Image, repository+"@sha256:") || len(actual.HostConfig.Binds) > 0 {
+		repository, digest, pinned := strings.Cut(actual.Config.Image, "@sha256:")
+		if !pinned || repository == "" || len(digest) != 64 || strings.Trim(digest, "0123456789abcdef") != "" || len(actual.HostConfig.Binds) > 0 {
 			return workload.ErrConflict
 		}
 		for name := range actual.NetworkSettings.Networks {
@@ -203,58 +235,97 @@ func (e *Engine) Preflight(ctx context.Context, s workload.Stack) error {
 		}
 		for _, m := range actual.Mounts {
 			if !knownMount(spec, m) {
-				return workload.ErrConflict
+				if err := e.checkRetainedMount(ctx, s.Installation, m); err != nil {
+					return err
+				}
 			}
 		}
 	}
 	return nil
 }
+func (e *Engine) checkRetainedMount(ctx context.Context, installation string, m container.MountPoint) error {
+	if m.Type != mount.TypeVolume || !strings.HasPrefix(m.Name, "af-"+installation+"-") {
+		return workload.ErrConflict
+	}
+	call, cancel := context.WithTimeout(ctx, e.callTimeout)
+	defer cancel()
+	result, err := e.api.VolumeInspect(call, m.Name, client.VolumeInspectOptions{})
+	if errdefs.IsNotFound(err) {
+		return workload.ErrConflict
+	}
+	if err != nil {
+		return classify(err)
+	}
+	v := result.Volume
+	if v.Name != m.Name || !owned(v.Labels, installation, "volume") || v.Driver != "local" || len(v.Options) != 0 {
+		return workload.ErrConflict
+	}
+	return nil
+}
+
 func (e *Engine) Prepare(ctx context.Context, s workload.Stack) error {
 	for _, spec := range s.Specs {
-		if _, ok := e.images[spec.Image]; ok {
-			continue
-		}
-		call, cancel := context.WithTimeout(ctx, e.callTimeout)
-		image, err := e.api.ImageInspect(call, spec.Image)
-		cancel()
-		if errdefs.IsNotFound(err) {
-			pull, stop := context.WithTimeout(ctx, 3*time.Minute)
-			stream, pullErr := e.api.ImagePull(pull, spec.Image, client.ImagePullOptions{Platforms: []ocispec.Platform{{OS: "linux", Architecture: "amd64"}}})
-			if pullErr == nil {
-				pullErr = stream.Wait(pull)
-				stream.Close()
+		image, ok := e.images[spec.Image]
+		if !ok {
+			var err error
+			image, err = e.prepareImage(ctx, spec.Image)
+			if err != nil {
+				return err
 			}
-			stop()
-			if pullErr != nil {
-				return classify(pullErr)
-			}
-			call, cancel = context.WithTimeout(ctx, e.callTimeout)
-			image, err = e.api.ImageInspect(call, spec.Image)
-			cancel()
+			e.images[spec.Image] = image
 		}
-		if err != nil {
-			return classify(err)
-		}
-		if image.Os != "linux" || image.Architecture != "amd64" || image.Config == nil || image.Config.User == "" || strings.Split(image.Config.User, ":")[0] == "0" || strings.Split(image.Config.User, ":")[0] == "root" || image.Config.Healthcheck == nil || len(image.Config.Healthcheck.Test) == 0 || image.Config.Healthcheck.Test[0] == "NONE" {
+		if image.Os != "linux" || image.Architecture != "amd64" || image.Config == nil ||
+			!validEffectiveUser(effectiveUser(spec, image.Config.User)) || image.Config.Healthcheck == nil ||
+			len(image.Config.Healthcheck.Test) == 0 || image.Config.Healthcheck.Test[0] == "NONE" {
 			return workload.ErrConflict
 		}
 		for target := range image.Config.Volumes {
-			known := false
-			for _, m := range spec.Mounts {
-				if m.Target == target {
-					known = true
-				}
-			}
-			if !known {
+			if !slices.ContainsFunc(spec.Mounts, func(m workload.Mount) bool { return m.Target == target }) {
 				return workload.ErrConflict
 			}
 		}
-		e.images[spec.Image] = image
 	}
 	if err := e.network(ctx, s, true); err != nil {
 		return err
 	}
 	return e.volumes(ctx, s, true)
+}
+
+func (e *Engine) prepareImage(ctx context.Context, reference string) (client.ImageInspectResult, error) {
+	call, cancel := context.WithTimeout(ctx, e.callTimeout)
+	image, err := e.api.ImageInspect(call, reference)
+	cancel()
+	if !errdefs.IsNotFound(err) {
+		return image, classify(err)
+	}
+
+	pull, stop := context.WithTimeout(ctx, 3*time.Minute)
+	defer stop()
+	stream, err := e.api.ImagePull(pull, reference, client.ImagePullOptions{
+		Platforms: []ocispec.Platform{{OS: "linux", Architecture: "amd64"}},
+	})
+	if err != nil {
+		return client.ImageInspectResult{}, classify(err)
+	}
+	err = stream.Wait(pull)
+	stream.Close()
+	if err != nil {
+		return client.ImageInspectResult{}, classify(err)
+	}
+
+	call, cancel = context.WithTimeout(ctx, e.callTimeout)
+	defer cancel()
+	image, err = e.api.ImageInspect(call, reference)
+	return image, classify(err)
+}
+
+func validEffectiveUser(user string) bool {
+	if !strings.ContainsRune(user, ':') {
+		// Docker accepts numeric UID-only image users. An explicit UID keeps
+		// image user-name resolution from selecting UID zero.
+		user += ":1"
+	}
+	return workloadrelease.ValidUser(user)
 }
 
 func state(c container.InspectResponse) workload.State {
@@ -327,7 +398,7 @@ func matches(s workload.Spec, c container.InspectResponse, image client.ImageIns
 	if !reflect.DeepEqual(env(config.Env), expected) {
 		return false
 	}
-	if !validBindingProfile(s) || len(c.Mounts) != len(s.Mounts)+len(s.Bindings) {
+	if len(c.Mounts) != len(s.Mounts) {
 		return false
 	}
 	for _, want := range s.Mounts {
@@ -341,27 +412,20 @@ func matches(s workload.Spec, c container.InspectResponse, image client.ImageIns
 			return false
 		}
 	}
-	for _, want := range s.Bindings {
-		found := false
-		for _, m := range c.Mounts {
-			if m.Type == mount.TypeBind && m.Source == want.Source && m.Destination == want.Target && m.RW != want.ReadOnly {
-				found = true
-			}
-		}
-		if !found {
-			return false
-		}
-	}
-
 	if len(c.NetworkSettings.Networks) != 1 {
 		return false
 	}
 	endpoint := c.NetworkSettings.Networks[s.Network]
-	if endpoint == nil || !slices.Contains(endpoint.Aliases, s.Alias) {
+	if endpoint == nil {
 		return false
 	}
+	for _, alias := range s.Aliases {
+		if !slices.Contains(endpoint.Aliases, alias) {
+			return false
+		}
+	}
 	for _, alias := range endpoint.Aliases {
-		if alias != s.Alias && alias != s.Name && alias != c.ID && alias != c.ID[:min(len(c.ID), 12)] {
+		if !slices.Contains(s.Aliases, alias) && alias != s.Name && alias != c.ID && alias != c.ID[:min(len(c.ID), 12)] {
 			return false
 		}
 	}
@@ -369,9 +433,6 @@ func matches(s workload.Spec, c container.InspectResponse, image client.ImageIns
 }
 
 func (e *Engine) Create(ctx context.Context, s workload.Spec, op string) (workload.State, error) {
-	if !validBindingProfile(s) {
-		return workload.State{}, workload.ErrConflict
-	}
 	ctx, cancel := context.WithTimeout(ctx, e.callTimeout)
 	defer cancel()
 	values := labels(s.Installation, s.Role)
@@ -381,18 +442,15 @@ func (e *Engine) Create(ctx context.Context, s workload.Spec, op string) (worklo
 	for _, m := range s.Mounts {
 		mounts = append(mounts, mount.Mount{Type: mount.TypeVolume, Source: m.Name, Target: m.Target, ReadOnly: m.ReadOnly})
 	}
-	for _, m := range s.Bindings {
-		mounts = append(mounts, mount.Mount{Type: mount.TypeBind, Source: m.Source, Target: m.Target, ReadOnly: m.ReadOnly})
-	}
 	var environment []string
 	for k, v := range s.Env {
 		environment = append(environment, k+"="+v)
 	}
 	slices.Sort(environment)
 	created, err := e.api.ContainerCreate(ctx, client.ContainerCreateOptions{Name: s.Name, Platform: &ocispec.Platform{OS: "linux", Architecture: "amd64"},
-		Config:           &container.Config{Image: s.Image, User: creationUser(s), Env: environment, Labels: values, StopTimeout: &s.StopSeconds, Healthcheck: &container.HealthConfig{Interval: 10 * time.Second, Timeout: 5 * time.Second, Retries: 3, StartPeriod: time.Duration(s.HealthStart) * time.Second}},
+		Config:           &container.Config{Image: s.Image, User: s.User, Env: environment, Labels: values, StopTimeout: &s.StopSeconds, Healthcheck: &container.HealthConfig{Interval: 10 * time.Second, Timeout: 5 * time.Second, Retries: 3, StartPeriod: time.Duration(s.HealthStart) * time.Second}},
 		HostConfig:       &container.HostConfig{NetworkMode: container.NetworkMode(s.Network), RestartPolicy: container.RestartPolicy{Name: "unless-stopped"}, ReadonlyRootfs: s.ReadOnly, CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges:true"}, Tmpfs: map[string]string{"/tmp": "rw,noexec,nosuid,nodev"}, Mounts: mounts},
-		NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{s.Network: {Aliases: []string{s.Alias}}}}})
+		NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{s.Network: {Aliases: s.Aliases}}}})
 	if err != nil {
 		return workload.State{}, classify(err)
 	}
@@ -409,7 +467,7 @@ func (e *Engine) Create(ctx context.Context, s workload.Spec, op string) (worklo
 func (e *Engine) Mutate(parent context.Context, expected workload.State, action, value string) error {
 	budget := e.callTimeout
 	if action == "stop" {
-		budget = 30 * time.Second
+		budget = 120*time.Second + e.callTimeout
 	}
 	ctx, cancel := context.WithTimeout(parent, budget)
 	defer cancel()
@@ -435,6 +493,9 @@ func (e *Engine) Mutate(parent context.Context, expected workload.State, action,
 			return nil
 		}
 		seconds := 20
+		if configured := actual.Container.Config.StopTimeout; configured != nil && *configured >= 1 && *configured <= 120 {
+			seconds = *configured
+		}
 		_, err = e.api.ContainerStop(ctx, current.ID, client.ContainerStopOptions{Timeout: &seconds})
 	case "remove":
 		_, err = e.api.ContainerRemove(ctx, current.ID, client.ContainerRemoveOptions{Force: true})
@@ -473,10 +534,7 @@ func (e *Engine) Mutate(parent context.Context, expected workload.State, action,
 	return nil
 }
 func (e *Engine) Wait(parent context.Context, s workload.Spec, id string) error {
-	budget := 150 * time.Second
-	if s.Role == "gateway" {
-		budget = 60 * time.Second
-	}
+	budget := time.Duration(s.HealthStart)*time.Second + 90*time.Second
 	ctx, cancel := context.WithTimeout(parent, budget)
 	defer cancel()
 	for {

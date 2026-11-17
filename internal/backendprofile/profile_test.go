@@ -8,13 +8,14 @@ import (
 	"errors"
 	"io"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 )
 
 func fixture(t *testing.T) map[string]any {
 	t.Helper()
-	data, err := os.ReadFile("testdata/profile-v3.json")
+	data, err := os.ReadFile("testdata/profile-v4.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,15 +58,13 @@ func TestParsePreservesTrustBytesAndNormalizesCoordinates(t *testing.T) {
 			setTrust(fields, trust)
 			fields["backend_profile"] = "another.profile-2"
 			fields["auth_issuer"] = "HTTPS://AUTH.EXAMPLE/"
-			fields["router_base_url"] = "https://ROUTER.EXAMPLE/v1/"
-			fields["runtime_gateway_base_url"] = "https://RUNTIME.EXAMPLE/"
 			fields["ingress_trust_sha256"] = strings.ToUpper(fields["ingress_trust_sha256"].(string))
 			got, err := Parse(bytes.NewReader(encode(t, fields)))
 			if err != nil {
 				t.Fatal(err)
 			}
 			if got.ID != "another.profile-2" || got.AuthIssuer != "https://auth.example" ||
-				got.RouterBaseURL != "https://router.example/v1" || got.RuntimeGatewayBaseURL != "https://runtime.example" {
+				len(got.Resources) != 1 || got.Resources[0].Identifier != "https://resource.example/api" {
 				t.Fatalf("unexpected normalized coordinates: %#v", got)
 			}
 			if got.IngressTrustBundle != trust {
@@ -84,9 +83,9 @@ func TestParseRejectsInvalidProfile(t *testing.T) {
 		edit func(map[string]any)
 		want error
 	}{
-		{"unsupported version", func(p map[string]any) { p["schema_version"] = 4 }, ErrVersion},
+		{"unsupported version", func(p map[string]any) { p["schema_version"] = 3 }, ErrVersion},
 		{"missing version", func(p map[string]any) { delete(p, "schema_version") }, ErrJSON},
-		{"string version", func(p map[string]any) { p["schema_version"] = "3" }, ErrVersion},
+		{"string version", func(p map[string]any) { p["schema_version"] = "4" }, ErrVersion},
 		{"null version", func(p map[string]any) { p["schema_version"] = nil }, ErrVersion},
 		{"unknown field", func(p map[string]any) { p["device_token"] = "sensitive-example" }, ErrJSON},
 		{"case alias", func(p map[string]any) { p["Auth_Issuer"] = p["auth_issuer"]; delete(p, "auth_issuer") }, ErrJSON},
@@ -102,11 +101,6 @@ func TestParseRejectsInvalidProfile(t *testing.T) {
 		{"hostless issuer", func(p map[string]any) { p["auth_issuer"] = "https:///auth" }, ErrAuthIssuer},
 		{"non ascii host", func(p map[string]any) { p["auth_issuer"] = "https://例.example" }, ErrAuthIssuer},
 		{"invalid port", func(p map[string]any) { p["auth_issuer"] = "https://auth.example:99999" }, ErrAuthIssuer},
-		{"router path", func(p map[string]any) { p["router_base_url"] = "https://router.example/v2" }, ErrRouterURL},
-		{"router escaped path", func(p map[string]any) { p["router_base_url"] = "https://router.example/%76%31" }, ErrRouterURL},
-		{"runtime v1", func(p map[string]any) { p["runtime_gateway_base_url"] = "https://runtime.example/v1/" }, ErrRuntimeURL},
-		{"runtime nested v1", func(p map[string]any) { p["runtime_gateway_base_url"] = "https://runtime.example/prefix/v1//" }, ErrRuntimeURL},
-		{"runtime encoded v1", func(p map[string]any) { p["runtime_gateway_base_url"] = "https://runtime.example/%76%31" }, ErrRuntimeURL},
 		{"wrong pin", func(p map[string]any) { p["ingress_trust_sha256"] = strings.Repeat("0", 64) }, ErrTrustPin},
 		{"short pin", func(p map[string]any) { p["ingress_trust_sha256"] = "01" }, ErrTrustPin},
 		{"trust reformat", func(p map[string]any) { p["ingress_trust_bundle"] = p["ingress_trust_bundle"].(string) + " " }, ErrTrustPin},
@@ -119,7 +113,7 @@ func TestParseRejectsInvalidProfile(t *testing.T) {
 			if !errors.Is(err, test.want) {
 				t.Fatalf("error = %v, want %v", err, test.want)
 			}
-			if got != (Profile{}) {
+			if !reflect.DeepEqual(got, Profile{}) {
 				t.Fatal("invalid input returned a partial profile")
 			}
 		})
@@ -170,8 +164,8 @@ func TestParseRejectsInvalidPublicTrust(t *testing.T) {
 func TestParseRejectsAmbiguousJSON(t *testing.T) {
 	data := string(encode(t, fixture(t)))
 	for name, input := range map[string]string{
-		"duplicate":          strings.Replace(data, `"schema_version":3`, `"schema_version":3,"schema_version":3`, 1),
-		"escaped duplicate":  strings.Replace(data, `"schema_version":3`, `"schema_version":3,"schema_vers\u0069on":3`, 1),
+		"duplicate":          strings.Replace(data, `"schema_version":4`, `"schema_version":4 ,"schema_version":4`, 1),
+		"escaped duplicate":  strings.Replace(data, `"schema_version":4`, `"schema_version":4,"schema_vers\u0069on":4`, 1),
 		"trailing document":  data + `{}`,
 		"array":              `[]`,
 		"null":               `null`,
@@ -261,9 +255,9 @@ func TestParseTrustKeyLimits(t *testing.T) {
 
 func TestParseRejectsInvalidIPLiteral(t *testing.T) {
 	profile := fixture(t)
-	profile["runtime_gateway_base_url"] = "https://[invalid]/"
-	if _, err := Parse(bytes.NewReader(encode(t, profile))); !errors.Is(err, ErrRuntimeURL) {
-		t.Fatalf("invalid bracketed IP literal: error = %v, want %v", err, ErrRuntimeURL)
+	profile["protected_resources"].([]any)[0].(map[string]any)["resource"] = "https://[invalid]/"
+	if _, err := Parse(bytes.NewReader(encode(t, profile))); !errors.Is(err, ErrResources) {
+		t.Fatalf("invalid bracketed IP literal: error = %v, want %v", err, ErrResources)
 	}
 }
 
@@ -284,7 +278,7 @@ func TestParseAcceptsTrustBoundaryAndUnicodeKid(t *testing.T) {
 }
 
 func FuzzParse(f *testing.F) {
-	data, err := os.ReadFile("testdata/profile-v3.json")
+	data, err := os.ReadFile("testdata/profile-v4.json")
 	if err != nil {
 		f.Fatal(err)
 	}
@@ -294,7 +288,7 @@ func FuzzParse(f *testing.F) {
 	f.Fuzz(func(t *testing.T, data []byte) {
 		profile, err := Parse(bytes.NewReader(data))
 		if err != nil {
-			if profile != (Profile{}) {
+			if !reflect.DeepEqual(profile, Profile{}) {
 				t.Fatal("rejected input returned a partial profile")
 			}
 			var code Error

@@ -12,12 +12,14 @@ import (
 
 	"github.com/amnezia-gpt/agent-firmware/internal/backendprofile"
 	"github.com/amnezia-gpt/agent-firmware/internal/configuration"
+	"github.com/amnezia-gpt/agent-firmware/internal/deviceapi"
 	"github.com/amnezia-gpt/agent-firmware/internal/discovery"
 	"github.com/amnezia-gpt/agent-firmware/internal/dockerengine"
 	"github.com/amnezia-gpt/agent-firmware/internal/host"
 	"github.com/amnezia-gpt/agent-firmware/internal/service"
 	"github.com/amnezia-gpt/agent-firmware/internal/supervisor"
 	"github.com/amnezia-gpt/agent-firmware/internal/workload"
+	"github.com/amnezia-gpt/agent-firmware/internal/workloadrelease"
 )
 
 func main() {
@@ -44,6 +46,9 @@ func run(args []string, input io.Reader, stdout, stderr io.Writer) int {
 		return respond(stdout, stderr, struct {
 			Ready bool `json:"ready"`
 		}{true})
+	}
+	if len(args) > 0 && args[0] == "validate-release" {
+		return validateRelease(args[1:], stdout, stderr)
 	}
 	if len(args) > 0 && args[0] == "update" {
 		return runUpdate(args[1:], stdout, stderr)
@@ -85,7 +90,45 @@ func run(args []string, input io.Reader, stdout, stderr io.Writer) int {
 
 // discover is replaced in tests, which have no public issuer to ask.
 var discover = func(ctx context.Context, issuer string) ([]byte, error) {
-	return discovery.Profile(ctx, discovery.NewClient(), issuer)
+	client := discovery.NewClient()
+	defer client.CloseIdleConnections()
+	return discovery.Profile(ctx, client, issuer)
+}
+
+// The existing socket transport serves the earlier protocol. SELF-19 moves
+// this runtime gate to the v3 stream when that transport is available.
+var servedDeviceAPI = deviceapi.Protocol
+
+func checkPlatform(release workloadrelease.Release) error {
+	return release.CheckPlatform("linux/amd64")
+}
+
+func checkDeployableRelease(release workloadrelease.Release) error {
+	if err := checkPlatform(release); err != nil {
+		return err
+	}
+	return release.CheckDeviceAPI(servedDeviceAPI)
+}
+
+func validateRelease(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 2 || args[0] != "--release" || args[1] == "" {
+		return report(stderr, "invalid_usage", 2)
+	}
+	release, err := openInput(args[1])
+	if err != nil {
+		return report(stderr, "input_read_failed", 1)
+	}
+	defer release.Close()
+	manifest, err := workloadrelease.Parse(release)
+	if err != nil {
+		return report(stderr, err.Error(), 1)
+	}
+	if err := checkDeployableRelease(manifest); err != nil {
+		return report(stderr, err.Error(), 1)
+	}
+	return respond(stdout, stderr, struct {
+		Valid bool `json:"valid"`
+	}{true})
 }
 
 var hostLayout = host.DefaultLayout()
@@ -202,12 +245,21 @@ func runConfiguration(args []string, input io.Reader, stdout, stderr io.Writer) 
 	if err != nil {
 		return report(stderr, err.Error(), 1)
 	}
+	if err := checkPlatform(accepted.Release()); err != nil {
+		return report(stderr, err.Error(), 1)
+	}
+	if _, err := workload.FromInput(accepted); err != nil {
+		return report(stderr, err.Error(), 1)
+	}
 	if command == "validate" {
 		return respond(stdout, stderr, struct {
 			Valid bool `json:"valid"`
 		}{true})
 	}
 
+	if err := checkDeployableRelease(accepted.Release()); err != nil {
+		return report(stderr, err.Error(), 1)
+	}
 	changed, err := saveConfiguration(context.Background(), store, accepted)
 	if err != nil {
 		return report(stderr, err.Error(), 1)
@@ -264,6 +316,13 @@ func executeManaged(parent context.Context, store configuration.Store, manager *
 		if err != nil {
 			return err
 		}
+		if err := checkDeployableRelease(input.Release()); err != nil {
+			return err
+		}
+		stack, err := workload.FromInput(input)
+		if err != nil {
+			return err
+		}
 		if manager == nil {
 			return errAPIServe
 		}
@@ -280,7 +339,6 @@ func executeManaged(parent context.Context, store configuration.Store, manager *
 			return err
 		}
 		defer engine.Close()
-		stack := workload.FromInput(input)
 		result, err = workload.Apply(ctx, engine, session, stack)
 		return err
 	})

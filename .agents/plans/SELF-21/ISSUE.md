@@ -3,15 +3,15 @@
 ## Metadata
 
 - Type: Feature / release contract
-- Status: Design Pending (design, schema and vectors accepted by the owner on 2026-11-17; no plan yet, no
-  implementation authorized)
+- Status: Validating (local implementation verified; matching release and API transport pending)
 - Design: [DESIGN.md](DESIGN.md)
+- Plan: [PLAN.md](PLAN.md)
 - Size / risk: Medium / high (the release contract changes; the firmware runs what a manifest describes)
 - Parent: [SELF-14](../SELF-14/ISSUE.md)
-- Dependencies: [SELF-16](../SELF-16/ISSUE.md). Blocks [SELF-17](../SELF-17/ISSUE.md) and
-  [SELF-19](../SELF-19/ISSUE.md), which would otherwise hardcode more of the stack.
-- Authorization: owner asked to record the issue and to design the manifest now (2026-11-17). Implementation is
-  not authorized yet.
+- Dependencies: [SELF-16](../SELF-16/ISSUE.md). The verified parser and stack model are prerequisites for
+  [SELF-17](../SELF-17/ISSUE.md) and [SELF-19](../SELF-19/ISSUE.md). Joint release acceptance also needs the
+  completed transport from SELF-19 and the workload publication.
+- Authorization: owner authorized implementation on 2026-11-17.
 
 ## Problem
 
@@ -48,13 +48,13 @@ list.
 
 ## Acceptance Criteria
 
-- [ ] The firmware source holds no service name, environment name, in-container path or image repository of any
+- [x] The firmware source holds no service name, environment name, in-container path or image repository of any
   workload.
 - [ ] A manifest describing today's three-container stack converges to the same containers as before, apart from
   agreed changes.
-- [ ] A manifest that leaves the safety envelope (host mount, published port, root user, tag instead of digest,
+- [x] A manifest that leaves the safety envelope (host mount, published port, root user, tag instead of digest,
   unknown field) is rejected before any change.
-- [ ] A second, different valid manifest (other names, another service count) is applied by the same binary.
+- [x] A second, different valid manifest (other names, another service count) is applied by the same binary.
 - [ ] The pinned release file is byte-identical to the manifest the workload release published, and the release
   workflow fails otherwise.
 
@@ -62,6 +62,15 @@ list.
 
 Resource limits for containers; see DESIGN.md.
 
+## Evidence
+
+Go tests use the accepted vectors, including all 30 rejection cases. Fake-engine tests apply two distinct
+manifests and exercise ownership, dependency health, volume policy and service retirement rollback. The final
+Go test binaries and bootstrap harness passed in a disposable Ubuntu 24.04 container on native Linux amd64.
+The release gate rejected altered bytes, unavailable published input and a Device API the binary does not serve.
+See [PLAN.md](PLAN.md) for commands and limits.
+
 ## Next Action
 
-Owner selects the issue after SELF-16; then a plan. The workloads repository needs the same schema to publish releases.
+Use the verified manifest model for SELF-17. Complete the published-pin and live convergence checks with the
+matching workload release and SELF-19. SELF-16's service-start evidence remains tracked in SELF-16.

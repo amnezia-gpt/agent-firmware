@@ -1,9 +1,9 @@
 # Local device services
 
-The current firmware runs one installation-scoped Device API in `serve`. The
-API and its enrollment-code service run on the Unix socket while the Device API
-v3 transport is developed in [SELF-19](../.agents/plans/SELF-19/ISSUE.md).
-The accepted v3 contract and its public vectors live in
+This document describes the Unix Device API delivered in SELF-16. Schema 3
+manifests require Device API v3, so the deployment gate in SELF-21 rejects them
+until the new transport is delivered in [SELF-19](../.agents/plans/SELF-19/ISSUE.md).
+The accepted v3 contract and public vectors live in
 [SELF-14](../.agents/plans/SELF-14/DESIGN.md).
 
 ## Software root secret

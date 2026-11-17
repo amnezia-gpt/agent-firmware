@@ -5,149 +5,101 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 )
 
-func fixture(t *testing.T, name string) map[string]any {
-	t.Helper()
-	data, err := os.ReadFile("testdata/" + name + ".json")
+func TestAcceptedManifestVectors(t *testing.T) {
+	data, err := os.ReadFile("../../.agents/plans/SELF-21/workload-release-v3.vectors.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var fields map[string]any
-	if err := json.Unmarshal(data, &fields); err != nil {
+	var vectors struct {
+		Valid  json.RawMessage
+		Reject []struct {
+			Reason string
+			Set    map[string]any
+			Remove string
+		}
+	}
+	if err := json.Unmarshal(data, &vectors); err != nil {
 		t.Fatal(err)
 	}
-	return fields
-}
-
-func encoded(t *testing.T, fields map[string]any) []byte {
-	t.Helper()
-	data, err := json.Marshal(fields)
-	if err != nil {
-		t.Fatal(err)
+	if _, err := Parse(bytes.NewReader(vectors.Valid)); err != nil {
+		t.Fatalf("valid vector: %v", err)
 	}
-	return data
-}
-
-func TestParseReleaseShapes(t *testing.T) {
-	for _, name := range []string{"manifest", "publication"} {
-		t.Run(name, func(t *testing.T) {
-			got, err := Parse(bytes.NewReader(encoded(t, fixture(t, name))))
+	if len(vectors.Reject) == 0 {
+		t.Fatal("missing rejection vectors")
+	}
+	for _, probe := range vectors.Reject {
+		t.Run(probe.Reason, func(t *testing.T) {
+			var value map[string]any
+			if err := json.Unmarshal(vectors.Valid, &value); err != nil {
+				t.Fatal(err)
+			}
+			for pointer, replacement := range probe.Set {
+				patch(t, value, pointer, replacement, false)
+			}
+			if probe.Remove != "" {
+				patch(t, value, probe.Remove, nil, true)
+			}
+			input, err := json.Marshal(value)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.Platform != "linux/amd64" || got.SourceRevision != strings.Repeat("1", 40) ||
-				!strings.HasSuffix(got.GatewayImage, "@sha256:"+strings.Repeat("b", 64)) ||
-				!strings.HasSuffix(got.CodexImage, "@sha256:"+strings.Repeat("a", 64)) {
-				t.Fatalf("unexpected resolved release: %#v", got)
+			if _, err := Parse(bytes.NewReader(input)); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("invalid vector accepted: %v", err)
 			}
 		})
 	}
 }
 
-func TestParseRejectsEarlierContractsAndOtherSchemas(t *testing.T) {
-	for _, name := range []string{"manifest", "publication"} {
-		for _, test := range []struct {
-			name string
-			edit func(map[string]any)
-			want error
-		}{
-			{"old manifest version", func(p map[string]any) { p["schema_version"] = 1 }, ErrInvalid},
-			{"old selector v1", func(p map[string]any) { p["workload_contract"] = "urn:amnezia-gpt:workload-contract:device:v1" }, ErrInvalid},
-			{"old selector v2", func(p map[string]any) { p["workload_contract"] = "urn:amnezia-gpt:workload-contract:device:v2" }, ErrInvalid},
-			{"unknown version", func(p map[string]any) { p["schema_version"] = 3 }, ErrInvalid},
-			{"zero version", func(p map[string]any) { p["schema_version"] = 0 }, ErrInvalid},
-			{"string version", func(p map[string]any) { p["schema_version"] = "2" }, ErrInvalid},
-			{"null version", func(p map[string]any) { p["schema_version"] = nil }, ErrInvalid},
-			{"missing version", func(p map[string]any) { delete(p, "schema_version") }, ErrInvalid},
-		} {
-			t.Run(name+"/"+test.name, func(t *testing.T) {
-				fields := fixture(t, name)
-				test.edit(fields)
-				got, err := Parse(bytes.NewReader(encoded(t, fields)))
-				if !errors.Is(err, test.want) || got != (Release{}) {
-					t.Fatalf("got %#v, error=%v; want empty release, error=%v", got, err, test.want)
-				}
-			})
+func patch(t *testing.T, object any, pointer string, replacement any, remove bool) {
+	t.Helper()
+	head, tail, nested := strings.Cut(strings.TrimPrefix(pointer, "/"), "/")
+	head = strings.NewReplacer("~1", "/", "~0", "~").Replace(head)
+	switch node := object.(type) {
+	case map[string]any:
+		switch {
+		case nested:
+			patch(t, node[head], tail, replacement, remove)
+		case remove:
+			delete(node, head)
+		default:
+			node[head] = replacement
 		}
+	case []any:
+		i, err := strconv.Atoi(head)
+		if err != nil || i < 0 || i >= len(node) || remove && !nested {
+			t.Fatalf("invalid vector array edit %q", pointer)
+		}
+		if nested {
+			patch(t, node[i], tail, replacement, remove)
+		} else {
+			node[i] = replacement
+		}
+	default:
+		t.Fatalf("invalid vector edit %q", pointer)
 	}
 }
 
-func TestParseRejectsIncompatibleOrAmbiguousRelease(t *testing.T) {
-	for _, name := range []string{"manifest", "publication"} {
-		for _, test := range []struct {
-			name string
-			edit func(map[string]any)
-		}{
-			{"candidate", func(p map[string]any) { p["kind"] = "agent-workloads-publication-candidate" }},
-			{"wrong platform", func(p map[string]any) { p["platform"] = "linux/arm64" }},
-			{"abbreviated revision", func(p map[string]any) { p["source_revision"] = "1111111" }},
-			{"extra role", func(p map[string]any) { p["images"].(map[string]any)["other"] = map[string]any{} }},
-			{"missing role", func(p map[string]any) { delete(p["images"].(map[string]any), "openclaw-codex") }},
-			{"unknown executable member", func(p map[string]any) { p["command"] = "do-not-execute" }},
-			{"unapproved repository", func(p map[string]any) {
-				p["images"].(map[string]any)["openclaw-codex"].(map[string]any)["repository"] = "other.example/image"
-			}},
-			{"moving image", func(p map[string]any) {
-				p["images"].(map[string]any)["openclaw-codex"].(map[string]any)["reference"] = "docker.io/amneziavpn/agent-workload-openclaw-codex:dev"
-			}},
-			{"digest mismatch", func(p map[string]any) {
-				p["images"].(map[string]any)["openclaw-codex"].(map[string]any)["digest"] = "sha256:" + strings.Repeat("c", 64)
-			}},
-		} {
-			t.Run(name+"/"+test.name, func(t *testing.T) {
-				fields := fixture(t, name)
-				test.edit(fields)
-				got, err := Parse(bytes.NewReader(encoded(t, fields)))
-				if err == nil || got != (Release{}) {
-					t.Fatal("invalid release accepted or partial result returned")
-				}
-			})
-		}
-	}
-}
-
-func TestParseRejectsMixedSourceTagsAndFalseValidation(t *testing.T) {
-	for _, name := range []string{"manifest", "publication"} {
-		p := fixture(t, name)
-		key := "source_tag"
-		if name == "publication" {
-			key = "published_tag"
-		}
-		p["images"].(map[string]any)["openclaw-codex"].(map[string]any)[key] = "sha-" + strings.Repeat("2", 40)
-		if _, err := Parse(bytes.NewReader(encoded(t, p))); err == nil {
-			t.Fatal("mixed source revision accepted")
-		}
-	}
-	p := fixture(t, "publication")
-	p["validation"].(map[string]any)["result"] = "failed"
-	if _, err := Parse(bytes.NewReader(encoded(t, p))); err == nil {
-		t.Fatal("failed publication accepted")
-	}
-}
-
-func TestParseRejectsDuplicateAndTrailingMetadata(t *testing.T) {
-	p := string(encoded(t, fixture(t, "manifest")))
-	for _, data := range []string{
-		p + `{}`, strings.Replace(p, `"schema_version":2`, `"schema_version":2,"schema_version":2`, 1),
-		strings.Replace(p, `"digest":`, `"digest":"sha256:duplicate","digest":`, 1),
-		strings.Replace(p, `"source_revision":`, `"source_revision":"\ud800","source_revision":`, 1),
-	} {
-		if _, err := Parse(strings.NewReader(data)); err == nil {
-			t.Fatal("ambiguous metadata accepted")
-		}
-	}
-}
-
-func TestParseReleaseReadLimit(t *testing.T) {
-	data := encoded(t, fixture(t, "manifest"))
-	data = append(data, bytes.Repeat([]byte(" "), 64*1024-len(data))...)
-	if _, err := Parse(bytes.NewReader(data)); err != nil {
+func TestManifestBoundsAndStrictNestedFields(t *testing.T) {
+	valid, err := os.ReadFile("testdata/manifest.json")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Parse(bytes.NewReader(append(data, ' '))); !errors.Is(err, ErrTooLarge) {
-		t.Fatalf("error=%v", err)
+	for _, input := range [][]byte{
+		bytes.Replace(valid, []byte(`"health_start_seconds": 5`), []byte(`"health_start_seconds": 5, "health_start_seconds": 5`), 1),
+		bytes.Replace(valid, []byte(`"value":`), []byte(`"VALUE":`), 1),
+		bytes.Replace(valid, []byte(`"read_only": true`), []byte(`"read_only": null`), 1),
+		append(bytes.Clone(valid), []byte("{}")...),
+	} {
+		if _, err := Parse(bytes.NewReader(input)); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("expected strict rejection: %v", err)
+		}
+	}
+	if _, err := Parse(strings.NewReader(strings.Repeat(" ", MaxBytes+1))); err != ErrTooLarge {
+		t.Fatalf("oversized manifest: %v", err)
 	}
 }
