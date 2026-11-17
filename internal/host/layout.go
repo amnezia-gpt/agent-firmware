@@ -6,7 +6,9 @@ import "path/filepath"
 const (
 	MaxEngineAddress = 4096
 	ServiceName      = "agent-firmware.service"
-	AcceptedState    = "accepted.json"
+	LegacyState      = "accepted.json"
+	DeviceState      = "device.json"
+	EnrollmentDir    = "enrollment"
 	EngineState      = "engine-address"
 	RootSecret       = "root-secret"
 	OperationJournal = "operation.json"

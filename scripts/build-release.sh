@@ -33,7 +33,7 @@ go run ./cmd/agent-firmware validate-release --release "$workload" >/dev/null \
  || { echo 'this firmware rejects the workload release file' >&2; exit 1; }
 
 mkdir -p "$out"
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o "$out/agent-firmware-linux-amd64" ./cmd/agent-firmware
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-X main.firmwareVersion=$tag" -o "$out/agent-firmware-linux-amd64" ./cmd/agent-firmware
 cp "$workload" "$out/workload-release.json"
 
 sed -e "s/@@RELEASE_TAG@@/$tag/" \

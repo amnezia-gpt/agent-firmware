@@ -2,14 +2,9 @@
 # Brings the firmware to one host and starts its installer. This script only
 # checks that the host is supported, prepares Docker, downloads the pinned
 # release assets and verifies their digests. Everything else on the host is
-# done by the verified firmware binary: issuer discovery, input validation,
-# the service, rollback.
+# done by the verified firmware binary: device state, the service and rollback.
 #
-#   sh agent-firmware-install.sh --issuer <https issuer>
-#      [--enrollment-code-stdin | --enrollment-code-file <file>]
-#
-# The one-time enrollment code is never an argument (CWE-214) and this script
-# never reads it: standard input, or the named file, goes to the firmware as is.
+#   sh agent-firmware-install.sh
 #
 # The release pipeline replaces the three placeholders below. An unstamped
 # copy refuses to run. The whole body is one function called on the last
@@ -46,22 +41,7 @@ main() {
  trap cleanup EXIT
  trap 'error_code=bootstrap_interrupted; exit 1' HUP INT TERM
 
- issuer='' code_source='' code_file=''
- while [ "$#" -gt 0 ]; do
-  case "$1" in
-   --issuer)
-    [ "$#" -ge 2 ] && [ -n "$2" ] && [ -z "$issuer" ] || die invalid_usage
-    issuer=$2; shift 2 ;;
-   --enrollment-code-stdin)
-    [ -z "$code_source" ] || die invalid_usage
-    code_source=stdin; shift ;;
-   --enrollment-code-file)
-    [ "$#" -ge 2 ] && [ -n "$2" ] && [ -z "$code_source" ] || die invalid_usage
-    code_source=file; code_file=$2; shift 2 ;;
-   *) die invalid_usage ;;
-  esac
- done
- [ -n "$issuer" ] || die invalid_usage
+ [ "$#" = 0 ] || die invalid_usage
 
  is_digest() {
   [ "${#1}" = 64 ] || return 1
@@ -83,8 +63,6 @@ main() {
   command -v "$tool" >/dev/null 2>&1 || die prerequisite_missing
  done
 
- # Every program before the installer gets an empty standard input, so the
- # code, when piped in, is still unread when the firmware takes it.
  # The work directory must allow execution: /run is mounted noexec on Ubuntu,
  # so it lives beside the place the firmware is installed to. It is private
  # (umask 077), holds no secret and is removed on exit.
@@ -104,11 +82,11 @@ main() {
  firmware=$workdir/agent-firmware-linux-amd64
  chmod 700 "$firmware" || die bootstrap_write_failed
 
- # The firmware checks the issuer and the release before the host changes and
+ # The firmware checks the release before Docker is changed and
  # reports its own error code; do not print a second one.
- say "Checking the authorization server $issuer"
+ say "Checking the workload release"
  status=0
- timeout 90s "$firmware" install --issuer "$issuer" --release "$workdir/workload-release.json" --dry-run \
+ timeout 90s "$firmware" validate-release --release "$workdir/workload-release.json" \
   </dev/null >/dev/null || status=$?
  [ "$status" != 124 ] || die installation_check_timeout
  if [ "$status" != 0 ]; then
@@ -131,13 +109,8 @@ main() {
   timeout 10s systemctl is-active --quiet docker.service </dev/null || die docker_install_failed
  fi
 
- set -- install --issuer "$issuer" --release "$workdir/workload-release.json"
  status=0
- case "$code_source" in
-  stdin) "$firmware" "$@" --enrollment-code-stdin || status=$? ;;
-  file) "$firmware" "$@" --enrollment-code-file "$code_file" </dev/null || status=$? ;;
-  *) "$firmware" "$@" </dev/null || status=$? ;;
- esac
+ "$firmware" install --release "$workdir/workload-release.json" </dev/null || status=$?
  if [ "$status" != 0 ]; then
   reported=true
   exit 1

@@ -116,12 +116,12 @@ func TestInputFileFailureDoesNotLeakPath(t *testing.T) {
 }
 
 func TestStateCommandsRequireRootBeforeReadingOrWriting(t *testing.T) {
-	for _, command := range []string{"status", "configure"} {
+	for _, command := range []string{"status", "apply", "serve"} {
 		var stdout, stderr bytes.Buffer
 		state := filepath.Join(t.TempDir(), "private-state")
 		args := []string{command, "--state-dir", state}
-		if command == "configure" {
-			args = append(args, "--profile", "absent", "--release", "absent")
+		if command == "serve" && os.Geteuid() == 0 {
+			continue // The foreground service owns its signal context.
 		}
 		code := run(args, strings.NewReader(""), &stdout, &stderr)
 		if os.Geteuid() != 0 {
@@ -129,10 +129,10 @@ func TestStateCommandsRequireRootBeforeReadingOrWriting(t *testing.T) {
 				t.Fatalf("exit=%d stderr=%q", code, stderr.String())
 			}
 		} else if command == "status" {
-			if code != 0 || stdout.String() != "{\"configured\":false}\n" {
+			if code != 0 || !strings.HasPrefix(stdout.String(), "Device not installed\nFirmware ") {
 				t.Fatalf("exit=%d stdout=%q", code, stdout.String())
 			}
-		} else if code != 1 || stderr.String() != "{\"error_code\":\"input_read_failed\"}\n" {
+		} else if code != 1 || stderr.String() != "{\"error_code\":\"not_configured\"}\n" {
 			t.Fatalf("exit=%d stderr=%q", code, stderr.String())
 		}
 		if _, err := os.Lstat(state); !os.IsNotExist(err) {

@@ -2,16 +2,20 @@ package dockerengine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/amnezia-gpt/agent-firmware/internal/workload"
+	"github.com/amnezia-gpt/agent-firmware/internal/workloadrelease"
 )
 
 func socketServer(t *testing.T, handler http.HandlerFunc) string {
@@ -212,5 +216,83 @@ func TestPrerequisitesRejectRootlessOrWrongPlatformWithoutMutations(t *testing.T
 			t.Fatalf("unsupported engine accepted: %v", err)
 		}
 		e.Close()
+	}
+}
+
+func TestManufacturePullsImagesForEnrollmentAndRetry(t *testing.T) {
+	manifest, err := os.Open("../workloadrelease/testdata/manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manifest.Close()
+	release, err := workloadrelease.Parse(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := os.Open("../backendprofile/testdata/profile-v4.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer profile.Close()
+	if _, err := manifest.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	stack, err := workload.FromReaders(profile, manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := make(map[string]int)
+	var mu sync.Mutex
+	manufacturing := true
+	var pulls int
+	path := socketServer(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/_ping":
+			w.Header().Set("API-Version", "1.52")
+		case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/images/create"):
+			pulls++
+			io.WriteString(w, "{\"status\":\"done\"}\n")
+		case r.Method == "GET" && strings.Contains(r.URL.Path, "/images/"):
+			seen[r.URL.Path]++
+			if seen[r.URL.Path] == 1 {
+				w.WriteHeader(http.StatusNotFound)
+				io.WriteString(w, `{"message":"missing"}`)
+			} else {
+				io.WriteString(w, `{"Id":"image","Os":"linux","Architecture":"amd64","Config":{"User":"65532:65532","Healthcheck":{"Test":["CMD","check"]}}}`)
+			}
+		case !manufacturing && r.Method == "GET" && strings.Contains(r.URL.Path, "/networks/"):
+			json.NewEncoder(w).Encode(map[string]any{"Name": stack.Network, "Driver": "bridge", "Labels": labels(stack.Installation, "network")})
+		case !manufacturing && r.Method == "GET" && strings.Contains(r.URL.Path, "/volumes/"):
+			json.NewEncoder(w).Encode(map[string]any{"Driver": "local", "Labels": labels(stack.Installation, "volume")})
+		default:
+			t.Error("unexpected engine request:", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	})
+	for phase := range 3 {
+		e, err := newClient(path, time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mu.Lock()
+		manufacturing = phase == 0
+		mu.Unlock()
+		if phase == 0 {
+			err = e.PrepareImages(t.Context(), release)
+		} else {
+			err = e.Prepare(t.Context(), stack)
+		}
+		e.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if pulls != 2 || len(seen) != 2 {
+		t.Fatalf("expected two distinct digest pulls, got pulls=%d images=%d", pulls, len(seen))
 	}
 }

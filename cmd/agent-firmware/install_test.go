@@ -5,176 +5,161 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/amnezia-gpt/agent-firmware/internal/backendprofile"
 	"github.com/amnezia-gpt/agent-firmware/internal/configuration"
-	"github.com/amnezia-gpt/agent-firmware/internal/installer"
+	"github.com/amnezia-gpt/agent-firmware/internal/host"
 )
 
-const installCode = "enrc_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopq"
+const manifestFixture = "../../internal/workloadrelease/testdata/manifest.json"
+const profileFixture = "../../internal/backendprofile/testdata/profile-v4.json"
+
+func fixture(t *testing.T, path string) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
 
 func TestInstallCommand(t *testing.T) {
 	enableTestRelease(t)
-	state := defaultStateDir
+	originalDir, originalDiscover, originalReady, originalPlace := defaultStateDir, discover, hostReady, place
+	t.Cleanup(func() {
+		defaultStateDir, discover, hostReady, place = originalDir, originalDiscover, originalReady, originalPlace
+	})
 	defaultStateDir = filepath.Join(t.TempDir(), "state")
-	t.Cleanup(func() { defaultStateDir = state })
-	profile, err := os.ReadFile("../../internal/backendprofile/testdata/profile-v4.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	release := "../../internal/workloadrelease/testdata/manifest.json"
-	codeFile := filepath.Join(t.TempDir(), "code")
-	if err := os.WriteFile(codeFile, []byte(installCode+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	originalDiscover, originalReady, originalPlace := discover, hostReady, place
-	defer func() { discover, hostReady, place = originalDiscover, originalReady, originalPlace }()
-	ready, placed, held, asked := "", 0, "", 0
+	ready, placed := "", 0
 	hostReady = func() string { return ready }
-	discover = func(_ context.Context, issuer string) ([]byte, error) {
-		asked++
-		if issuer != "https://auth.example" {
-			return nil, installer.Error("invalid_issuer")
-		}
-		return profile, nil
+	discover = func(context.Context, string) ([]byte, error) {
+		t.Fatal("install contacted an issuer")
+		return nil, nil
 	}
-	place = func(_ context.Context, accepted *configuration.Input, code string, progress func(string)) error {
-		progress("step")
+	place = func(_ context.Context, device *configuration.Device, progress func(string)) error {
 		placed++
-		held = code
-		if accepted.Profile().AuthIssuer != "https://auth.example" {
-			t.Fatal("profile not passed")
+		if device.Generation() == "" {
+			t.Fatal("no device release")
 		}
-		return nil
+		_, err := (configuration.Store{Path: defaultStateDir}).Manufacture(device, nil)
+		progress("step")
+		return err
 	}
-	base := []string{"--issuer", "https://auth.example", "--release", release}
-	with := func(extra ...string) []string { return append(append([]string{"install"}, base...), extra...) }
-	for _, test := range []struct {
-		name           string
-		args           []string
-		input          string
-		ready          string
-		code           int
-		stdout, stderr string
-		placed         int
-		held           string
+	for _, tc := range []struct {
+		name      string
+		args      []string
+		ready     string
+		code      int
+		errorCode string
 	}{
-		{"without code", with(), "", "", 0, "{\"installed\":true}\n", "", 1, ""},
-		{"code on standard input", with("--enrollment-code-stdin"), installCode, "", 0, "{\"installed\":true}\n", "", 1, installCode},
-		{"code from a file", with("--enrollment-code-file", codeFile), "", "", 0, "{\"installed\":true}\n", "", 1, installCode},
-		{"dry run changes nothing", with("--dry-run"), "", "", 0, "{\"valid\":true}\n", "", 0, ""},
-		{"code out of bounds", with("--enrollment-code-stdin"), "enrc_short", "", 1, "", "{\"error_code\":\"invalid_enrollment_code\"}\n", 0, ""},
-		{"over-long code is refused, not truncated", with("--enrollment-code-stdin"), strings.Repeat("A", 400), "", 1, "", "{\"error_code\":\"invalid_enrollment_code\"}\n", 0, ""},
-		{"no code on standard input", with("--enrollment-code-stdin"), "", "", 1, "", "{\"error_code\":\"invalid_enrollment_code\"}\n", 0, ""},
-		{"unreadable code file", with("--enrollment-code-file", codeFile+".missing"), "", "", 1, "", "{\"error_code\":\"input_read_failed\"}\n", 0, ""},
-		{"host not ready", with(), "", "root_required", 1, "", "{\"error_code\":\"root_required\"}\n", 0, ""},
-		{"issuer refused", []string{"install", "--issuer", "http://auth.example", "--release", release}, "", "", 1, "", "{\"error_code\":\"invalid_issuer\"}\n", 0, ""},
-		{"unreadable release", []string{"install", "--issuer", "https://auth.example", "--release", release + ".missing"}, "", "", 1, "", "{\"error_code\":\"input_read_failed\"}\n", 0, ""},
-		{"invalid release", []string{"install", "--issuer", "https://auth.example", "--release", codeFile}, "", "", 1, "", "{\"error_code\":\"invalid_workload_release\"}\n", 0, ""},
-		{"code as an argument", with("--enrollment-code", installCode), "", "", 2, "", "{\"error_code\":\"invalid_usage\"}\n", 0, ""},
-		{"two code sources", with("--enrollment-code-stdin", "--enrollment-code-file", codeFile), "", "", 2, "", "{\"error_code\":\"invalid_usage\"}\n", 0, ""},
-		{"dry run takes no code", with("--dry-run", "--enrollment-code-stdin"), installCode, "", 2, "", "{\"error_code\":\"invalid_usage\"}\n", 0, ""},
-		{"issuer missing", []string{"install", "--release", release}, "", "", 2, "", "{\"error_code\":\"invalid_usage\"}\n", 0, ""},
-		{"release missing", []string{"install", "--issuer", "https://auth.example"}, "", "", 2, "", "{\"error_code\":\"invalid_usage\"}\n", 0, ""},
+		{"release only", []string{"--release", manifestFixture}, "", 0, ""},
+		{"issuer rejected", []string{"--release", manifestFixture, "--issuer", "https://auth.example"}, "", 2, "invalid_usage"},
+		{"code rejected", []string{"--release", manifestFixture, "--enrollment-code-stdin"}, "", 2, "invalid_usage"},
+		{"release missing", nil, "", 2, "invalid_usage"},
+		{"unreadable release", []string{"--release", manifestFixture + ".missing"}, "", 1, "input_read_failed"},
+		{"host unavailable", []string{"--release", manifestFixture}, "root_required", 1, "root_required"},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			ready, placed, held = test.ready, 0, ""
-			var stdout, stderr bytes.Buffer
-			code := run(test.args, strings.NewReader(test.input), &stdout, &stderr)
-			// Progress lines precede the result on standard error; an error is always its last line.
-			lines := stderr.String()
-			if test.stderr != "" {
-				if !strings.HasSuffix(lines, test.stderr) {
-					t.Fatalf("stderr=%q", lines)
+		t.Run(tc.name, func(t *testing.T) {
+			ready, placed = tc.ready, 0
+			var output, errors bytes.Buffer
+			code := run(append([]string{"install"}, tc.args...), unreadableStdin{t}, &output, &errors)
+			if code != tc.code {
+				t.Fatalf("exit=%d stderr=%q", code, &errors)
+			}
+			if tc.errorCode != "" {
+				if errors.String() != "{\"error_code\":\""+tc.errorCode+"\"}\n" || placed != 0 || output.Len() != 0 {
+					t.Fatalf("stdout=%q stderr=%q placed=%d", &output, &errors, placed)
 				}
-				lines = test.stderr
-			} else if strings.Contains(lines, "error_code") || test.code == 0 && test.stdout == "{\"installed\":true}\n" && !strings.Contains(lines, "agent-firmware: step\n") {
-				t.Fatalf("stderr=%q", lines)
-			} else {
-				lines = ""
-			}
-			if test.stdout == "{\"valid\":true}\n" && stderr.Len() != 0 {
-				t.Fatalf("a dry run printed progress: %q", stderr.String())
-			}
-			if code != test.code || stdout.String() != test.stdout || lines != test.stderr || placed != test.placed || held != test.held {
-				t.Fatalf("exit=%d stdout=%q stderr=%q placed=%d", code, stdout.String(), stderr.String(), placed)
-			}
-			if strings.Contains(stdout.String()+stderr.String(), installCode) {
-				t.Fatal("code in output")
+			} else if output.String() != "{\"installed\":true}\n" || errors.String() != "agent-firmware: step\n" || placed != 1 {
+				t.Fatalf("stdout=%q stderr=%q placed=%d", &output, &errors, placed)
 			}
 		})
 	}
-	// An invalid code stops before any network request.
-	asked = 0
-	var out bytes.Buffer
-	run(with("--enrollment-code-stdin"), strings.NewReader("x"), &out, &out)
-	if asked != 0 {
-		t.Fatal("discovery ran for an invalid code")
-	}
 }
 
-func TestPrepareInstallRefreshesMissingScopesOnce(t *testing.T) {
-	profileBytes, err := os.ReadFile("../../internal/backendprofile/testdata/profile-v4.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	releaseBytes, err := os.ReadFile("../../internal/workloadrelease/testdata/manifest.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	input, err := configuration.Parse(bytes.NewReader(profileBytes), bytes.NewReader(releaseBytes))
-	if err != nil {
-		t.Fatal(err)
-	}
-	store := configuration.Store{Path: filepath.Join(t.TempDir(), "state")}
-	if _, err := store.Save(input); err != nil {
-		t.Fatal(err)
-	}
+type unreadableStdin struct{ t *testing.T }
 
-	originalRefresh := refreshResources
-	t.Cleanup(func() { refreshResources = originalRefresh })
+func (r unreadableStdin) Read([]byte) (int, error) {
+	r.t.Fatal("install read stdin")
+	return 0, nil
+}
+
+func TestServiceRefreshesMissingScopesOncePerRelease(t *testing.T) {
+	profile, manifest := fixture(t, profileFixture), fixture(t, manifestFixture)
+	store := configuration.Store{Path: filepath.Join(t.TempDir(), "state")}
+	device, err := configuration.ParseDevice(bytes.NewReader(manifest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := device.WithProfile(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Manufacture(device, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Exclusive(func(s *configuration.Session) error { return s.BeginEnrollment(input) }); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := store.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := refreshResources
+	t.Cleanup(func() { refreshResources = original })
 	refreshes := 0
 	refreshResources = func(_ context.Context, profile backendprofile.Profile) ([]byte, error) {
 		refreshes++
-		profile.Resources[0].Scopes = append(profile.Resources[0].Scopes, "example:next")
+		profile.Resources = slices.Clone(profile.Resources)
+		profile.Resources[0].Scopes = append(slices.Clone(profile.Resources[0].Scopes), "example:next")
 		return backendprofile.Encode(profile)
 	}
-	issuer := input.Profile().AuthIssuer
-	if _, err := prepareInstallInput(t.Context(), store, issuer, releaseBytes); err != nil || refreshes != 0 {
-		t.Fatalf("resolved input refreshed resources: %v (%d)", err, refreshes)
+	manager := &apiManager{}
+	if _, _, err := manager.stack(t.Context(), snapshot); err != nil || refreshes != 0 {
+		t.Fatalf("resolved scopes retried: %v, count=%d", err, refreshes)
 	}
-	next := bytes.ReplaceAll(releaseBytes, []byte("example:use"), []byte("example:next"))
-	refreshed, err := prepareInstallInput(t.Context(), store, issuer, next)
-	if err != nil || refreshed.Profile().IngressTrustBundle != input.Profile().IngressTrustBundle || refreshes != 1 {
-		t.Fatalf("missing scope refresh failed: %v (%d)", err, refreshes)
+	for _, scope := range []string{"example:next", "example:absent"} {
+		snapshot.Device, err = configuration.ParseDevice(bytes.NewReader(bytes.ReplaceAll(manifest, []byte("example:use"), []byte(scope))))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for range 2 {
+			_, refreshed, err := manager.stack(t.Context(), snapshot)
+			if scope == "example:next" && (err != nil || len(refreshed) == 0) || scope == "example:absent" && err != backendprofile.ErrScopeMissing {
+				t.Fatalf("scope %s: %v", scope, err)
+			}
+		}
 	}
-	missing := bytes.ReplaceAll(releaseBytes, []byte("example:use"), []byte("example:absent"))
-	if _, err := prepareInstallInput(t.Context(), store, issuer, missing); err != backendprofile.ErrScopeMissing || refreshes != 2 {
-		t.Fatalf("unresolved input retried or accepted: %v (%d)", err, refreshes)
+	if refreshes != 2 {
+		t.Fatalf("refresh count=%d", refreshes)
 	}
 }
 
 func TestReleaseGateRejectsUnavailableTransportBeforeDiscovery(t *testing.T) {
-	path := "../../internal/workloadrelease/testdata/manifest.json"
-	before := hostReady
-	hostReady = func() string { return "" }
-	t.Cleanup(func() { hostReady = before })
-	original := discover
-	discover = func(context.Context, string) ([]byte, error) {
-		t.Fatal("discovery attempted for unavailable transport")
-		return nil, nil
-	}
-	t.Cleanup(func() { discover = original })
-	for _, args := range [][]string{
-		{"validate-release", "--release", path},
-		{"install", "--dry-run", "--issuer", "https://auth.example", "--release", path},
-	} {
+	beforeDir, beforeDiscover, beforeReady := defaultStateDir, discover, hostReady
+	t.Cleanup(func() { defaultStateDir, discover, hostReady = beforeDir, beforeDiscover, beforeReady })
+	defaultStateDir = filepath.Join(t.TempDir(), "state")
+	hostReady = func() string { t.Fatal("host check ran for unsupported transport"); return "" }
+	discover = func(context.Context, string) ([]byte, error) { t.Fatal("unexpected discovery"); return nil, nil }
+	for _, command := range []string{"validate-release", "install"} {
 		var out, stderr bytes.Buffer
-		if code := run(args, strings.NewReader(""), &out, &stderr); code != 1 ||
+		if code := run([]string{command, "--release", manifestFixture}, strings.NewReader(""), &out, &stderr); code != 1 ||
 			stderr.String() != "{\"error_code\":\"unsupported_device_api\"}\n" || out.Len() != 0 {
 			t.Fatalf("release gate: %d %q %q", code, &out, &stderr)
 		}
+	}
+	if err := os.Mkdir(defaultStateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(defaultStateDir, host.LegacyState), []byte("old configuration"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	if code := run([]string{"install", "--release", manifestFixture}, unreadableStdin{t}, &out, &stderr); code != 1 ||
+		stderr.String() != "{\"error_code\":\"legacy_state_layout\"}\n" {
+		t.Fatalf("legacy install: %d %q", code, &stderr)
 	}
 }

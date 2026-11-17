@@ -3,10 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"os"
-	"os/signal"
 	"syscall"
 	"time"
 
@@ -16,8 +14,6 @@ import (
 	"github.com/amnezia-gpt/agent-firmware/internal/discovery"
 	"github.com/amnezia-gpt/agent-firmware/internal/dockerengine"
 	"github.com/amnezia-gpt/agent-firmware/internal/host"
-	"github.com/amnezia-gpt/agent-firmware/internal/service"
-	"github.com/amnezia-gpt/agent-firmware/internal/supervisor"
 	"github.com/amnezia-gpt/agent-firmware/internal/workload"
 	"github.com/amnezia-gpt/agent-firmware/internal/workloadrelease"
 )
@@ -54,7 +50,10 @@ func run(args []string, input io.Reader, stdout, stderr io.Writer) int {
 		return runUpdate(args[1:], stdout, stderr)
 	}
 	if len(args) > 0 && args[0] == "install" {
-		return runInstall(args[1:], input, stdout, stderr)
+		return runInstall(args[1:], stdout, stderr)
+	}
+	if len(args) > 0 && args[0] == "enroll" {
+		return runEnroll(args[1:], input, stdout, stderr)
 	}
 	if len(args) > 0 && args[0] == "discover-profile" {
 		// The profile is assembled from the issuer's standard metadata; nothing on the host changes.
@@ -73,7 +72,14 @@ func run(args []string, input io.Reader, stdout, stderr io.Writer) int {
 		return 0
 	}
 	if len(args) > 0 && args[0] != "validate-profile" {
-		return runConfiguration(args, input, stdout, stderr)
+		switch args[0] {
+		case "validate":
+			return validateConfiguration(args[1:], stdout, stderr)
+		case "status", "apply", "serve":
+			return runStateCommand(args, stdout, stderr)
+		default:
+			return report(stderr, "invalid_usage", 2)
+		}
 	}
 	if len(args) != 1 {
 		return report(stderr, "invalid_usage", 2)
@@ -134,102 +140,16 @@ func validateRelease(args []string, stdout, stderr io.Writer) int {
 var hostLayout = host.DefaultLayout()
 var defaultStateDir = hostLayout.State
 
-func runConfiguration(args []string, input io.Reader, stdout, stderr io.Writer) int {
-	command := args[0]
-	enrollment := command == "enrollment-code-set" || command == "enrollment-code-clear"
-	if command != "validate" && command != "configure" && command != "status" && command != "apply" && command != "serve" && !enrollment {
+func validateConfiguration(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 4 {
 		return report(stderr, "invalid_usage", 2)
 	}
-	options := map[string]string{}
-	for i := 1; i < len(args); i += 2 {
-		if i+1 >= len(args) || args[i+1] == "" || options[args[i]] != "" {
-			return report(stderr, "invalid_usage", 2)
-		}
-		switch args[i] {
-		case "--profile", "--release", "--state-dir":
-		default:
+	options := make(map[string]string, 2)
+	for i := 0; i < len(args); i += 2 {
+		if args[i] != "--profile" && args[i] != "--release" || args[i+1] == "" || options[args[i]] != "" {
 			return report(stderr, "invalid_usage", 2)
 		}
 		options[args[i]] = args[i+1]
-	}
-	if command == "status" || command == "apply" || command == "serve" || enrollment {
-		if options["--profile"] != "" || options["--release"] != "" {
-			return report(stderr, "invalid_usage", 2)
-		}
-	} else if options["--profile"] == "" || options["--release"] == "" || command == "validate" && options["--state-dir"] != "" {
-		return report(stderr, "invalid_usage", 2)
-	}
-	if command != "validate" && os.Geteuid() != 0 {
-		return report(stderr, "root_required", 1)
-	}
-	dir := options["--state-dir"]
-	if dir == "" {
-		dir = defaultStateDir
-	}
-	store := configuration.Store{Path: dir}
-	if enrollment {
-		// The code arrives on standard input only: arguments are visible in process listings.
-		state, err := enrollmentCode(store, input, command == "enrollment-code-set")
-		if err != nil {
-			return report(stderr, err.Error(), 1)
-		}
-		return respond(stdout, stderr, struct {
-			EnrollmentCode string `json:"enrollment_code"`
-		}{state})
-	}
-	if command == "apply" || command == "serve" {
-		parent, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		defer stop()
-		if command == "serve" {
-			manager := &apiManager{}
-			defer manager.close()
-			notifier := (service.Systemd{Layout: hostLayout}).Notifier()
-			err := supervisor.Run(parent, func(ctx context.Context) (bool, error) {
-				result, err := executeManaged(ctx, store, manager)
-				manager.drain(stdout)
-				return result.Changed, err
-			}, func(event supervisor.Event) error {
-
-				data, _ := json.Marshal(event)
-				data = append(data, '\n')
-				n, err := stdout.Write(data)
-				if err != nil || n != len(data) {
-					return supervisor.ErrOutput
-				}
-				if event.State == "converged" || event.State == "repaired" {
-					if notifier.Ready() != nil {
-						return supervisor.ErrNotify
-					}
-				}
-				return nil
-			}, supervisor.Interval)
-			if err != nil {
-				return report(stderr, err.Error(), 1)
-			}
-			return 0
-		}
-		result, err := execute(parent, store)
-		if err != nil {
-			return report(stderr, err.Error(), 1)
-		}
-		return respond(stdout, stderr, result)
-	}
-
-	if command == "status" {
-		accepted, err := store.Load()
-		if errors.Is(err, configuration.ErrMissing) {
-			return respond(stdout, stderr, struct {
-				Configured bool `json:"configured"`
-			}{false})
-		}
-		if err != nil {
-			return report(stderr, err.Error(), 1)
-		}
-		return respond(stdout, stderr, struct {
-			Configured     bool   `json:"configured"`
-			Generation     string `json:"generation"`
-			EnrollmentCode string `json:"enrollment_code"`
-		}{true, accepted.Generation(), enrollmentState(accepted)})
 	}
 	profile, err := openInput(options["--profile"])
 	if err != nil {
@@ -241,34 +161,19 @@ func runConfiguration(args []string, input io.Reader, stdout, stderr io.Writer) 
 		return report(stderr, "input_read_failed", 1)
 	}
 	defer release.Close()
-	accepted, err := configuration.Parse(profile, release)
+	input, err := configuration.Parse(profile, release)
 	if err != nil {
 		return report(stderr, err.Error(), 1)
 	}
-	if err := checkPlatform(accepted.Release()); err != nil {
+	if err := checkPlatform(input.Release()); err != nil {
 		return report(stderr, err.Error(), 1)
 	}
-	if _, err := workload.FromInput(accepted); err != nil {
-		return report(stderr, err.Error(), 1)
-	}
-	if command == "validate" {
-		return respond(stdout, stderr, struct {
-			Valid bool `json:"valid"`
-		}{true})
-	}
-
-	if err := checkDeployableRelease(accepted.Release()); err != nil {
-		return report(stderr, err.Error(), 1)
-	}
-	changed, err := saveConfiguration(context.Background(), store, accepted)
-	if err != nil {
+	if _, err := workload.FromInput(input); err != nil {
 		return report(stderr, err.Error(), 1)
 	}
 	return respond(stdout, stderr, struct {
-		Configured bool   `json:"configured"`
-		Changed    bool   `json:"changed"`
-		Generation string `json:"generation"`
-	}{true, changed, accepted.Generation()})
+		Valid bool `json:"valid"`
+	}{true})
 }
 
 func openInput(path string) (*os.File, error) {
@@ -302,50 +207,4 @@ func report(stderr io.Writer, code string, exit int) int {
 		return 1
 	}
 	return exit
-}
-
-func execute(parent context.Context, store configuration.Store) (workload.Result, error) {
-	return executeManaged(parent, store, nil)
-}
-func executeManaged(parent context.Context, store configuration.Store, manager *apiManager) (workload.Result, error) {
-	ctx, cancel := context.WithTimeout(parent, 20*time.Minute)
-	defer cancel()
-	var result workload.Result
-	err := store.Exclusive(func(session *configuration.Session) error {
-		input, err := session.Load()
-		if err != nil {
-			return err
-		}
-		if err := checkDeployableRelease(input.Release()); err != nil {
-			return err
-		}
-		stack, err := workload.FromInput(input)
-		if err != nil {
-			return err
-		}
-		if manager == nil {
-			return errAPIServe
-		}
-		if err := manager.ensure(session, input); err != nil {
-			manager.close()
-			return err
-		}
-		address, err := session.EngineAddress()
-		if err != nil {
-			return err
-		}
-		engine, err := dockerengine.New(address)
-		if err != nil {
-			return err
-		}
-		defer engine.Close()
-		result, err = workload.Apply(ctx, engine, session, stack)
-		return err
-	})
-	if errors.Is(err, configuration.ErrRootSecret) || errors.Is(err, configuration.ErrCorrupt) ||
-		errors.Is(err, configuration.ErrMissing) || errors.Is(err, configuration.ErrRead) ||
-		errors.Is(err, configuration.ErrUnsafe) {
-		manager.close()
-	}
-	return result, err
 }

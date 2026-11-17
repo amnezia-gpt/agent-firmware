@@ -291,6 +291,26 @@ func (e *Engine) Prepare(ctx context.Context, s workload.Stack) error {
 	return e.volumes(ctx, s, true)
 }
 
+// PrepareImages downloads the release's distinct digest images without
+// creating or resolving any enrollment resources.
+func (e *Engine) PrepareImages(ctx context.Context, release workloadrelease.Release) error {
+	for _, name := range release.Order() {
+		reference := release.Services[name].Image.Reference()
+		if _, ok := e.images[reference]; ok {
+			continue
+		}
+		image, err := e.prepareImage(ctx, reference)
+		if err != nil {
+			return err
+		}
+		if image.Os != "linux" || image.Architecture != "amd64" || image.Config == nil {
+			return workload.ErrConflict
+		}
+		e.images[reference] = image
+	}
+	return nil
+}
+
 func (e *Engine) prepareImage(ctx context.Context, reference string) (client.ImageInspectResult, error) {
 	call, cancel := context.WithTimeout(ctx, e.callTimeout)
 	image, err := e.api.ImageInspect(call, reference)

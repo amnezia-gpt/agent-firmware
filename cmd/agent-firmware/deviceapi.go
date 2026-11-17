@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"strings"
-	"time"
 
 	"github.com/amnezia-gpt/agent-firmware/internal/configuration"
 	"github.com/amnezia-gpt/agent-firmware/internal/deviceapi"
@@ -14,15 +12,6 @@ import (
 )
 
 const errAPIServe deviceapi.Error = "device_api_requires_serve"
-
-func saveConfiguration(parent context.Context, store configuration.Store, input *configuration.Input) (bool, error) {
-	store.BootstrapCheck = func(session *configuration.Session, input *configuration.Input) error {
-		ctx, cancel := context.WithTimeout(parent, 30*time.Second)
-		defer cancel()
-		return checkFreshWorkloadVolumes(ctx, session, input)
-	}
-	return store.Save(input)
-}
 
 var checkFreshWorkloadVolumes = func(ctx context.Context, session *configuration.Session, input *configuration.Input) error {
 	stack, err := workload.FromInput(input)
@@ -48,44 +37,17 @@ var checkFreshWorkloadVolumes = func(ctx context.Context, session *configuration
 	return nil
 }
 
-// enrollmentCode holds or removes the one-time code of the configured
-// installation. It reports only whether a code is held, never the value.
-func enrollmentCode(store configuration.Store, input io.Reader, set bool) (string, error) {
-	code := ""
-	if set {
-		b, err := io.ReadAll(io.LimitReader(input, deviceapi.MaxEnrollmentCode+2))
-		code = strings.TrimSuffix(string(b), "\n")
-		if err != nil || !deviceapi.ValidEnrollmentCode(code) {
-			return "", deviceapi.ErrEnrollmentCode
-		}
-	}
-	accepted, err := store.Load()
-	if err != nil {
-		return "", err
-	}
-	codes, err := deviceapi.EnrollmentCodes(workload.EnrollmentID(accepted.Profile().AuthIssuer), set)
-	if err != nil {
-		return "", err
-	}
-	if !set {
-		return "none", codes.Delete()
-	}
-	return "held", codes.Put(code)
-}
-func enrollmentState(accepted *configuration.Input) string {
-	if codes, err := deviceapi.EnrollmentCodes(workload.EnrollmentID(accepted.Profile().AuthIssuer), false); err == nil && codes.Held() {
-		return "held"
-	}
-	return "none"
-}
-
 type apiManager struct {
-	runtime      *deviceapi.Runtime
-	installation string
+	runtime           *deviceapi.Runtime
+	installation      string
+	status            dockerengine.StatusCommand
+	refreshGeneration string
+	refreshProfile    []byte
+	refreshErr        error
 }
 
-func (m *apiManager) ensure(session *configuration.Session, input *configuration.Input) error {
-	installation := workload.EnrollmentID(input.Profile().AuthIssuer)
+func (m *apiManager) ensure(session *configuration.Session, device *configuration.Device, issuer string) error {
+	installation := workload.EnrollmentID(issuer)
 	if m.runtime != nil {
 		if m.installation != installation {
 			return deviceapi.ErrKeystore
@@ -97,7 +59,7 @@ func (m *apiManager) ensure(session *configuration.Session, input *configuration
 		m.runtime.Close()
 		m.runtime = nil
 	}
-	key, err := session.RootSecret(input)
+	key, err := session.RootSecret(device)
 	if err != nil {
 		return err
 	}

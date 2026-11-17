@@ -45,21 +45,13 @@ func checkedRootSecret(root *os.Root, fingerprint string) ([]byte, error) {
 }
 
 // RootSecret returns a validated copy for the running service. The caller clears it.
-func (s *Session) RootSecret(input *Input) ([]byte, error) {
-	return checkedRootSecret(s.root, input.rootFingerprint)
+func (s *Session) RootSecret(device *Device) ([]byte, error) {
+	return checkedRootSecret(s.root, device.rootFingerprint)
 }
 
 // initializeRootSecret runs only with the existing state writer lock, before
-// publishing the first accepted configuration.
+// publishing the first device record.
 func initializeRootSecret(root *os.Root) (string, error) {
-	secret, err := readRootSecret(root)
-	if err == nil {
-		defer clear(secret)
-		return secretFingerprint(secret), nil
-	}
-	if !errors.Is(err, ErrMissing) {
-		return "", ErrRootSecret
-	}
 	dir, err := root.Open(".")
 	if err != nil {
 		return "", ErrRootSecret
@@ -68,7 +60,7 @@ func initializeRootSecret(root *os.Root) (string, error) {
 	for {
 		names, readErr := dir.Readdirnames(32)
 		for _, name := range names {
-			if name != host.OperationLock && !pendingRecordName.MatchString(name) {
+			if name != host.OperationLock && name != host.RootSecret && !pendingRecordName.MatchString(name) {
 				return "", ErrRootSecret
 			}
 		}
@@ -79,13 +71,21 @@ func initializeRootSecret(root *os.Root) (string, error) {
 			return "", ErrRootSecret
 		}
 	}
+	secret, err := readRootSecret(root)
+	if err == nil {
+		defer clear(secret)
+		return secretFingerprint(secret), nil
+	}
+	if !errors.Is(err, ErrMissing) {
+		return "", ErrRootSecret
+	}
 	secret = make([]byte, rootSecretSize)
 	defer clear(secret)
 	if _, err := rand.Read(secret); err != nil {
 		return "", ErrRootSecret
 	}
-	// The configuration fault hooks belong to accepted.json. Root secret
-	// publication must finish durably before any accepted record refers to it.
+	// The configuration fault hooks belong to the device record. Root secret
+	// publication must finish durably before the device record refers to it.
 	guard := Store{beforeRename: func() error {
 		if _, err := root.Lstat(host.RootSecret); !errors.Is(err, os.ErrNotExist) {
 			return ErrRootSecret

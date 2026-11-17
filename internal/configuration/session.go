@@ -19,7 +19,11 @@ type Session struct {
 }
 
 func (s Store) Exclusive(fn func(*Session) error) error {
-	root, err := s.root(false)
+	return s.exclusive(false, fn)
+}
+
+func (s Store) exclusive(create bool, fn func(*Session) error) error {
+	root, err := s.root(create)
 	if err != nil {
 		return err
 	}
@@ -47,7 +51,7 @@ func operationLock(root *os.Root) (*os.File, error) {
 	return lock, nil
 }
 
-func (s *Session) Load() (*Input, error) { return load(s.root) }
+func (s *Session) Snapshot() (Snapshot, error) { return loadSnapshot(s.root) }
 func (s *Session) Read() ([]byte, error) {
 	f, err := openFile(s.root, host.OperationJournal, os.O_RDONLY)
 	if errors.Is(err, ErrMissing) {

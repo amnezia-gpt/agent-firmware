@@ -40,36 +40,21 @@ validated manifest can be installed by the current binary, run
 `agent-firmware validate-release --release workload-release.json`.
 It checks the target platform and required Device API.
 
-With a deployable manifest, the built executable can retain the supplied files:
+Firmware stores device state and enrollment state separately under `/var/lib/agent-firmware`.
+The device record contains the verified workload release and root secret fingerprint.
+The enrollment record contains the pinned backend profile and the observed enrollment outcome.
+Both records use atomic replacement and the same writer lock. State directories require
+root ownership and mode 0700. State and lock files require 0600. Symlinks,
+special files, hard links, unsafe modes and wrong ownership fail. Earlier combined
+state is reported as `legacy_state_layout`.
 
-```sh
-sudo /tmp/agent-firmware configure --profile backend-profile.json --release workload-release.json
-sudo /tmp/agent-firmware status
-sudo /tmp/agent-firmware serve
-```
+`sudo agent-firmware status` uses local state only. It reports whether the device is
+not installed, manufactured and not enrolled, pending enrollment, or enrolled.
+It includes the firmware version and shows the issuer only when enrolled.
+A directory sync failure reports `state_commit_uncertain`. Inspect status to
+learn which snapshot is visible.
 
-Configure, status and serve require root. First configuration checks the local
-engine for retained workload volumes before creating the software root secret.
-Persistent `serve` owns both application and the local API. The default state
-directory is `/var/lib/agent-firmware`. An operator may select a different
-private directory with `--state-dir`. Its parent must already exist. The state
-directory requires owner UID/GID and mode 0700. State and lock files require 0600.
-Symlinks, special files, hard links, unsafe modes and wrong ownership fail.
-
-One internal record retains both original documents, their normalized
-generation and the fingerprint of the software root secret. Configure validates
-before writing, uses a nonblocking writer lock, syncs a temporary file, renames
-it atomically and syncs the directory. Equivalent input returns `changed:false`.
-Changing the saved backend profile ID or issuer fails as an identity conflict.
-
-Status revalidates the accepted record on every invocation, returning
-`configured:false` or `configured:true` with its generation. It never reports
-that containers are applied. Rejected input preserves the prior state; corrupt
-stored input fails without replacement. A directory-sync failure reports
-`state_commit_uncertain`: the new snapshot may already be visible. Inspect
-status before deciding how to recover. Abandoned temporary files are not adopted.
-
-Convergence uses the same writer lock as configure. It operates on owned
+Convergence takes the configuration writer lock. It operates on owned
 containers, a private bridge and named volumes using an issuer-derived
 enrollment prefix. Services start after their declared dependencies are healthy.
 The firmware enforces no published ports or host mounts, dropped capabilities,
@@ -84,10 +69,10 @@ ownership are conflicts. A private bridge retains required outbound access.
 For replacement or retirement, firmware keeps stopped old containers with
 automatic restart disabled until the new stack passes health and verification. A private
 atomic journal lets a later convergence cycle recover after process interruption.
-Configure refuses updates while recovery is pending. Failed application restores
+Installation refuses an update while workload recovery is pending. Failed application restores
 prior IDs/names, restart policies and running state; committed backup-cleanup
 failure is reported separately. No apply/rollback path deletes or rewinds volumes.
-Images, network and new owned volumes can remain after failed first bootstrap.
+Images, the network and owned volumes can remain after failed first enrollment.
 
 Forward work is bounded to 15 minutes, pulls to 3 minutes each, API calls to
 15 seconds for ordinary requests. Stop calls use the configured grace period
@@ -121,60 +106,43 @@ Installation has three responsibilities with one owner each:
   workload release file of its own release and verifies their SHA-256. It does
   not read the enrollment code, parse a profile, write a unit or manage the
   service.
-- **The firmware** does everything else on the host with `agent-firmware
-  install`: it validates the issuer, the code's outer bounds and the workload
-  release, assembles the backend profile, places itself, writes the systemd
-  unit, starts the service and rolls back on failure; afterwards it owns
-  configuration, keys, containers and the local device API.
-- **The workload** (containers, the workloads repository) owns everything OAuth:
-  device registration, redeeming the code, tokens, and the connections to the
-  backend. It never touches the host, Docker or systemd.
+- **The firmware** verifies the workload release, prepares digest-pinned images, places
+  itself, writes the systemd unit and rolls back a failed installation. The service
+  can run on a manufactured host while it awaits enrollment. The enrollment command
+  discovers the backend profile, and the service applies the enrolled workload.
+- **The workload** owns OAuth registration, code redemption, tokens and backend
+  connections. It runs inside the container safety envelope.
 
-The enrollment page of the authorization server shows the command that
-downloads the script, checks its SHA-256 and runs:
+After downloading and verifying the bootstrap, manufacture the device with:
 
 ```sh
-printf '%s' '<one-time code>' | sudo sh agent-firmware-install.sh --issuer https://auth.example --enrollment-code-stdin
+sudo sh agent-firmware-install.sh
 ```
 
-While it works, the script and the firmware print short progress lines on
-standard error (download, server check, Docker, service, image download with a
-reminder every 30 seconds); standard output carries only the final
-`{"installed":true}` and an error is one JSON line. The code is never printed.
+The bootstrap takes no arguments and closes standard input when invoking
+`agent-firmware install --release workload-release.json`. It verifies the assets
+and checks release compatibility before it prepares Docker. The firmware creates
+the root secret during manufacture. It remains byte-identical across enrollment
+and repeated installs.
 
-The script passes its standard input (or `--enrollment-code-file <file>`)
-to the firmware untouched; the code is never an argument. The firmware command
-it starts, from the verified download, is:
+To enroll with a code issued by the authorization server:
 
 ```sh
-agent-firmware install --issuer https://auth.example --release workload-release.json [--enrollment-code-stdin | --enrollment-code-file <file>]
-agent-firmware install --issuer https://auth.example --release workload-release.json --dry-run
-sudo systemctl status agent-firmware.service
+printf '%s' '<one-time code>' | sudo agent-firmware enroll --issuer https://auth.example --enrollment-code-stdin
+sudo agent-firmware status
 ```
 
-An installed machine is updated with one constant command, the same for every
-environment; it needs no code and no page:
+`enroll` also accepts `--enrollment-code-file <file>`. The code stays in a private
+runtime file until the workload finishes or the attempt fails. The firmware waits
+a bounded time for the workload's outcome. A failed enrollment preserves the
+prepared resources for retry with the same issuer. An existing enrollment
+refuses a different issuer.
 
-```sh
-sudo agent-firmware update
-```
-
-It reads the issuer this installation was made for, downloads the installation
-script of the latest release and runs it. Firmware and the workload release
-pinned by that firmware release are updated together; identity, sign-in and
-data are kept.
-
-`--dry-run` validates the issuer, the discovered profile and the release and
-changes nothing; the script runs it before it touches Docker. `install` copies
-the running binary to `/usr/local/lib/agent-firmware/releases/<sha256>/`,
-points `current` and `/usr/local/bin/agent-firmware` at it and writes
-`/etc/systemd/system/agent-firmware.service`. It refuses host resources it
-does not recognize as its own (`installation_conflict`), serializes with a lock
-below `/run/agent-firmware-install`, and records the previous version, unit and
-accepted configuration in a versioned transaction: a failed or interrupted
-installation returns to them, and the next run first recovers an unfinished
-one. The code is held only after the service is enabled and is cleared when the
-installation fails. See [Local device services](docs/device-api.md).
+`sudo agent-firmware update` downloads and runs the latest bootstrap without
+arguments. The device release updates independently of the enrollment. The
+installer locks the lifecycle under `/run/agent-firmware-install` and journals
+the previous binary pointer, unit and device record. An installation failure
+or interrupted install restores these from the journal.
 
 Profile assembly is also available on its own and changes nothing on the host:
 

@@ -67,3 +67,20 @@ func effectiveUser(s workload.Spec, imageUser string) string {
 	}
 	return imageUser
 }
+
+// HasManagedVolumes checks for retained device data before first manufacture,
+// when no issuer is available to reconstruct enrollment-specific names.
+func (e *Engine) HasManagedVolumes(parent context.Context) (bool, error) {
+	ctx, cancel := context.WithTimeout(parent, e.callTimeout)
+	defer cancel()
+	result, err := e.api.VolumeList(ctx, client.VolumeListOptions{
+		Filters: make(client.Filters).Add("label", workload.LabelPrefix+"managed-by="+workload.Manager),
+	})
+	if err != nil {
+		return false, classify(err)
+	}
+	if len(result.Warnings) != 0 {
+		return false, workload.ErrEngine
+	}
+	return len(result.Items) > 0, nil
+}

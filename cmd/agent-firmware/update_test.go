@@ -23,7 +23,7 @@ func TestUpdateCommandUsage(t *testing.T) {
 	}
 }
 
-func TestUpdateRunsTheLatestScriptForTheStoredIssuer(t *testing.T) {
+func TestUpdateRunsTheLatestScript(t *testing.T) {
 	originalFetch, originalRun, originalDirectory := fetchUpdateScript, runUpdateScript, updateDirectory
 	defer func() {
 		fetchUpdateScript, runUpdateScript, updateDirectory = originalFetch, originalRun, originalDirectory
@@ -34,12 +34,12 @@ func TestUpdateRunsTheLatestScriptForTheStoredIssuer(t *testing.T) {
 	var fetchErr, runErr error
 	ran := ""
 	fetchUpdateScript = func(context.Context) ([]byte, error) { return fetched, fetchErr }
-	runUpdateScript = func(_ context.Context, path, issuer string, stdout, _ io.Writer) error {
+	runUpdateScript = func(_ context.Context, path string, stdout, _ io.Writer) error {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
 		}
-		ran = issuer + "|" + string(data)
+		ran = string(data)
 		_, _ = io.WriteString(stdout, "{\"installed\":true}\n")
 		return runErr
 	}
@@ -63,12 +63,12 @@ func TestUpdateRunsTheLatestScriptForTheStoredIssuer(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			fetched, fetchErr, runErr, ran = []byte(test.fetched), test.fetchErr, test.runErr, ""
 			var stdout, stderr bytes.Buffer
-			code := updateFrom("https://auth.example", &stdout, &stderr)
+			code := updateFrom(&stdout, &stderr)
 			errorLine := strings.TrimPrefix(stderr.String(), "agent-firmware: Downloading the latest release\n")
 			if code != test.code || stdout.String() != test.stdout || errorLine != test.stderr {
 				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 			}
-			if test.ran != (ran == "https://auth.example|"+script) {
+			if test.ran != (ran == script) {
 				t.Fatalf("ran=%q", ran)
 			}
 			if entries, _ := os.ReadDir(updateDirectory); len(entries) != 0 {

@@ -31,43 +31,52 @@ func testInput(t *testing.T) *Input {
 	return input
 }
 
+func testDevice(t *testing.T) *Device {
+	t.Helper()
+	input := testInput(t)
+	device, err := ParseDevice(bytes.NewReader(input.releaseBytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return device
+}
+
 func testStore(t *testing.T) Store {
 	t.Helper()
 	return Store{Path: filepath.Join(t.TempDir(), "state")}
 }
 
-func TestWholeInputSurvivesReopenAndEquivalentUpdateIsNoOp(t *testing.T) {
-	input := testInput(t)
+func TestDeviceReleaseSurvivesReopenAndEquivalentUpdateIsNoOp(t *testing.T) {
+	input := testDevice(t)
 	store := testStore(t)
-	changed, err := store.Save(input)
+	changed, err := store.Manufacture(input, nil)
 	if err != nil || !changed {
 		t.Fatalf("first save: changed=%v err=%v", changed, err)
 	}
-	loaded, err := (Store{Path: store.Path}).Load()
+	loaded, err := (Store{Path: store.Path}).LoadDevice()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Generation() != input.Generation() || !bytes.Equal(loaded.profileBytes, input.profileBytes) || !bytes.Equal(loaded.releaseBytes, input.releaseBytes) {
+	if loaded.Generation() != input.Generation() || !bytes.Equal(loaded.raw, input.raw) {
 		t.Fatal("input changed across reopen")
 	}
-	before, err := os.ReadFile(filepath.Join(store.Path, "accepted.json"))
+	before, err := os.ReadFile(filepath.Join(store.Path, "device.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	profile := bytes.ReplaceAll(input.profileBytes, []byte(`"auth_issuer": "https://auth.example"`), []byte(`"auth_issuer": "https://AUTH.EXAMPLE/"`))
-	equivalent, err := Parse(bytes.NewReader(profile), bytes.NewReader(input.releaseBytes))
+	equivalent, err := ParseDevice(bytes.NewReader(append(append([]byte(nil), input.raw...), '\n')))
 	if err != nil {
 		t.Fatal(err)
 	}
-	changed, err = store.Save(equivalent)
+	changed, err = store.Manufacture(equivalent, nil)
 	if err != nil || changed {
 		t.Fatalf("equivalent save: changed=%v err=%v", changed, err)
 	}
-	after, err := os.ReadFile(filepath.Join(store.Path, "accepted.json"))
+	after, err := os.ReadFile(filepath.Join(store.Path, "device.json"))
 	if err != nil || !bytes.Equal(before, after) {
 		t.Fatal("NoOp replaced retained input")
 	}
-	for _, name := range []string{"accepted.json", "operation.lock"} {
+	for _, name := range []string{"device.json", "operation.lock"} {
 		info, err := os.Stat(filepath.Join(store.Path, name))
 		if err != nil || info.Mode().Perm() != 0600 {
 			t.Fatal("unsafe file mode")
@@ -79,39 +88,16 @@ func TestWholeInputSurvivesReopenAndEquivalentUpdateIsNoOp(t *testing.T) {
 	}
 }
 
-func TestIdentityRetargetAndInvalidInputPreserveAcceptedState(t *testing.T) {
-	store := testStore(t)
-	input := testInput(t)
-	if _, err := store.Save(input); err != nil {
-		t.Fatal(err)
-	}
-	profile := bytes.ReplaceAll(input.profileBytes, []byte(`"backend_profile": "example"`), []byte(`"backend_profile": "other"`))
-	other, err := Parse(bytes.NewReader(profile), bytes.NewReader(input.releaseBytes))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Save(other); !errors.Is(err, ErrIdentityConflict) {
-		t.Fatalf("error=%v", err)
-	}
-	if _, err := store.Save(nil); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("nil save error=%v", err)
-	}
-	loaded, err := store.Load()
-	if err != nil || loaded.Generation() != input.Generation() {
-		t.Fatal("rejected update changed state")
-	}
-}
-
 func TestCommitFailuresPreserveOldOrReportUncertainty(t *testing.T) {
 	for _, after := range []bool{false, true} {
 		t.Run(map[bool]string{false: "before rename", true: "after rename"}[after], func(t *testing.T) {
 			store := testStore(t)
-			old := testInput(t)
-			if _, err := store.Save(old); err != nil {
+			old := testDevice(t)
+			if _, err := store.Manufacture(old, nil); err != nil {
 				t.Fatal(err)
 			}
-			raw := bytes.ReplaceAll(old.releaseBytes, []byte("v0.1.0"), []byte("v0.2.0"))
-			next, err := Parse(bytes.NewReader(old.profileBytes), bytes.NewReader(raw))
+			raw := bytes.ReplaceAll(old.raw, []byte("v0.1.0"), []byte("v0.2.0"))
+			next, err := ParseDevice(bytes.NewReader(raw))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -123,10 +109,10 @@ func TestCommitFailuresPreserveOldOrReportUncertainty(t *testing.T) {
 			} else {
 				store.beforeRename = failure
 			}
-			if _, err := store.Save(next); !errors.Is(err, want) {
+			if _, err := store.Manufacture(next, nil); !errors.Is(err, want) {
 				t.Fatalf("error=%v, want %v", err, want)
 			}
-			loaded, err := store.Load()
+			loaded, err := store.LoadDevice()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -143,8 +129,8 @@ func TestCommitFailuresPreserveOldOrReportUncertainty(t *testing.T) {
 
 func TestWriterContentionIsNonblocking(t *testing.T) {
 	store := testStore(t)
-	input := testInput(t)
-	if _, err := store.Save(input); err != nil {
+	input := testDevice(t)
+	if _, err := store.Manufacture(input, nil); err != nil {
 		t.Fatal(err)
 	}
 	file, err := os.OpenFile(filepath.Join(store.Path, "operation.lock"), os.O_RDWR, 0600)
@@ -156,27 +142,27 @@ func TestWriterContentionIsNonblocking(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
-	if _, err := store.Save(input); !errors.Is(err, ErrBusy) {
+	if _, err := store.Manufacture(input, nil); !errors.Is(err, ErrBusy) {
 		t.Fatalf("contention: %v", err)
 	}
-	if _, err := store.Load(); err != nil {
+	if _, err := store.LoadDevice(); err != nil {
 		t.Fatal("reader blocked on writer lock")
 	}
 }
 
 func TestLoadRejectsCorruptionAndIgnoresUncommittedFiles(t *testing.T) {
 	store := testStore(t)
-	input := testInput(t)
-	if _, err := store.Save(input); err != nil {
+	input := testDevice(t)
+	if _, err := store.Manufacture(input, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(store.Path, "pending-abandoned"), []byte("invalid"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Load(); err != nil {
+	if _, err := store.LoadDevice(); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(store.Path, "accepted.json")
+	path := filepath.Join(store.Path, "device.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -185,10 +171,10 @@ func TestLoadRejectsCorruptionAndIgnoresUncommittedFiles(t *testing.T) {
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Load(); !errors.Is(err, ErrCorrupt) {
+	if _, err := store.LoadDevice(); !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("corruption: %v", err)
 	}
-	if _, err := store.Save(input); !errors.Is(err, ErrCorrupt) {
+	if _, err := store.Manufacture(input, nil); !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("overwriting corrupt state: %v", err)
 	}
 }
@@ -197,11 +183,11 @@ func TestStateRejectsUnsafeModesAndSymlinks(t *testing.T) {
 	for _, name := range []string{"directory mode", "file mode", "state symlink", "lock symlink", "directory symlink", "lock fifo"} {
 		t.Run(name, func(t *testing.T) {
 			store := testStore(t)
-			input := testInput(t)
-			if _, err := store.Save(input); err != nil {
+			input := testDevice(t)
+			if _, err := store.Manufacture(input, nil); err != nil {
 				t.Fatal(err)
 			}
-			accepted := filepath.Join(store.Path, "accepted.json")
+			accepted := filepath.Join(store.Path, "device.json")
 			lock := filepath.Join(store.Path, "operation.lock")
 			switch name {
 			case "directory mode":
@@ -238,7 +224,7 @@ func TestStateRejectsUnsafeModesAndSymlinks(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if _, err := store.Save(input); !errors.Is(err, ErrUnsafe) {
+			if _, err := store.Manufacture(input, nil); !errors.Is(err, ErrUnsafe) {
 				t.Fatalf("unsafe state accepted: %v", err)
 			}
 		})
@@ -247,7 +233,7 @@ func TestStateRejectsUnsafeModesAndSymlinks(t *testing.T) {
 
 func TestReadAbsentStateDoesNotCreateFiles(t *testing.T) {
 	store := testStore(t)
-	if _, err := store.Load(); !errors.Is(err, ErrMissing) {
+	if _, err := store.LoadDevice(); !errors.Is(err, ErrMissing) {
 		t.Fatalf("error=%v", err)
 	}
 	if _, err := os.Lstat(store.Path); !errors.Is(err, os.ErrNotExist) {
@@ -257,9 +243,9 @@ func TestReadAbsentStateDoesNotCreateFiles(t *testing.T) {
 
 func TestProcessInterruptionAtCommitBoundary(t *testing.T) {
 	if stage := os.Getenv("FIRMWARE_TEST_CRASH_STAGE"); stage != "" {
-		input := testInput(t)
-		raw := bytes.ReplaceAll(input.releaseBytes, []byte("v0.1.0"), []byte("v0.2.0"))
-		next, err := Parse(bytes.NewReader(input.profileBytes), bytes.NewReader(raw))
+		input := testDevice(t)
+		raw := bytes.ReplaceAll(input.raw, []byte("v0.1.0"), []byte("v0.2.0"))
+		next, err := ParseDevice(bytes.NewReader(raw))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -269,14 +255,14 @@ func TestProcessInterruptionAtCommitBoundary(t *testing.T) {
 		} else {
 			store.syncDirectory = func(*os.File) error { os.Exit(23); return nil }
 		}
-		store.Save(next)
+		store.Manufacture(next, nil)
 		t.Fatal("helper did not terminate")
 	}
 	for _, stage := range []string{"before", "after"} {
 		t.Run(stage, func(t *testing.T) {
 			store := testStore(t)
-			input := testInput(t)
-			if _, err := store.Save(input); err != nil {
+			input := testDevice(t)
+			if _, err := store.Manufacture(input, nil); err != nil {
 				t.Fatal(err)
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -288,14 +274,14 @@ func TestProcessInterruptionAtCommitBoundary(t *testing.T) {
 			if !errors.As(err, &exit) || exit.ExitCode() != 23 {
 				t.Fatalf("helper exit: %v", err)
 			}
-			loaded, err := store.Load()
+			loaded, err := store.LoadDevice()
 			if err != nil {
 				t.Fatal(err)
 			}
 			if (loaded.Generation() == input.Generation()) != (stage == "before") {
 				t.Fatal("wrong generation after process termination")
 			}
-			if _, err := store.Save(loaded); err != nil {
+			if _, err := store.Manufacture(loaded, nil); err != nil {
 				t.Fatalf("process exit did not release lock: %v", err)
 			}
 		})
@@ -304,25 +290,25 @@ func TestProcessInterruptionAtCommitBoundary(t *testing.T) {
 
 func TestNoOpStillAcknowledgesDirectorySync(t *testing.T) {
 	store := testStore(t)
-	input := testInput(t)
-	if _, err := store.Save(input); err != nil {
+	input := testDevice(t)
+	if _, err := store.Manufacture(input, nil); err != nil {
 		t.Fatal(err)
 	}
 	store.syncDirectory = func(*os.File) error { return errors.New("sync failed") }
-	if _, err := store.Save(input); !errors.Is(err, ErrUncertain) {
+	if _, err := store.Manufacture(input, nil); !errors.Is(err, ErrUncertain) {
 		t.Fatalf("NoOp acknowledged an unsynchronized directory: %v", err)
 	}
 }
 
 func TestConcurrentReadersSeeCompleteAcceptedSnapshots(t *testing.T) {
 	store := testStore(t)
-	old := testInput(t)
-	raw := bytes.ReplaceAll(old.releaseBytes, []byte("v0.1.0"), []byte("v0.2.0"))
-	next, err := Parse(bytes.NewReader(old.profileBytes), bytes.NewReader(raw))
+	old := testDevice(t)
+	raw := bytes.ReplaceAll(old.raw, []byte("v0.1.0"), []byte("v0.2.0"))
+	next, err := ParseDevice(bytes.NewReader(raw))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Save(old); err != nil {
+	if _, err := store.Manufacture(old, nil); err != nil {
 		t.Fatal(err)
 	}
 	var readers sync.WaitGroup
@@ -334,7 +320,7 @@ func TestConcurrentReadersSeeCompleteAcceptedSnapshots(t *testing.T) {
 			defer readers.Done()
 			<-start
 			for j := 0; j < 300; j++ {
-				loaded, err := store.Load()
+				loaded, err := store.LoadDevice()
 				if err == nil && loaded.Generation() != old.Generation() && loaded.Generation() != next.Generation() {
 					err = errors.New("mixed snapshot")
 				}
@@ -354,7 +340,7 @@ func TestConcurrentReadersSeeCompleteAcceptedSnapshots(t *testing.T) {
 		if i%2 == 0 {
 			value = next
 		}
-		if _, err := store.Save(value); err != nil {
+		if _, err := store.Manufacture(value, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -368,8 +354,8 @@ func TestConcurrentReadersSeeCompleteAcceptedSnapshots(t *testing.T) {
 
 func TestDirectorySymlinkWithTrailingSlashIsRejected(t *testing.T) {
 	store := testStore(t)
-	input := testInput(t)
-	if _, err := store.Save(input); err != nil {
+	input := testDevice(t)
+	if _, err := store.Manufacture(input, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Rename(store.Path, store.Path+".real"); err != nil {
@@ -379,23 +365,23 @@ func TestDirectorySymlinkWithTrailingSlashIsRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	store.Path += "/"
-	if _, err := store.Load(); !errors.Is(err, ErrUnsafe) {
+	if _, err := store.LoadDevice(); !errors.Is(err, ErrUnsafe) {
 		t.Fatalf("trailing slash bypassed directory symlink guard: %v", err)
 	}
 }
 
 func TestExclusiveSessionSharesWriterLockAndPersistsOperation(t *testing.T) {
 	store := testStore(t)
-	input := testInput(t)
-	if _, err := store.Save(input); err != nil {
+	input := testDevice(t)
+	if _, err := store.Manufacture(input, nil); err != nil {
 		t.Fatal(err)
 	}
 	want := []byte(`{"operation":"example"}`)
 	if err := store.Exclusive(func(session *Session) error {
-		if _, err := store.Save(input); !errors.Is(err, ErrBusy) {
+		if _, err := store.Manufacture(input, nil); !errors.Is(err, ErrBusy) {
 			t.Fatalf("configure did not share apply lock: %v", err)
 		}
-		loaded, err := session.Load()
+		loaded, err := loadDevice(session.root)
 		if err != nil || loaded.Generation() != input.Generation() {
 			t.Fatal("session did not load accepted input")
 		}
@@ -403,7 +389,7 @@ func TestExclusiveSessionSharesWriterLockAndPersistsOperation(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Save(input); !errors.Is(err, ErrPending) {
+	if _, err := store.Manufacture(input, nil); !errors.Is(err, ErrPending) {
 		t.Fatalf("configure overwrote pending operation: %v", err)
 	}
 	if err := store.Exclusive(func(session *Session) error {
@@ -415,7 +401,7 @@ func TestExclusiveSessionSharesWriterLockAndPersistsOperation(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Save(input); err != nil {
+	if _, err := store.Manufacture(input, nil); err != nil {
 		t.Fatal(err)
 	}
 }

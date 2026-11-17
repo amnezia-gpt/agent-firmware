@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Opt-in disposable Linux-host check; never runs from ordinary go test.
+"""Opt-in Unix Device API check from the SELF-16 checkout.
+
+Run this harness at the SELF-16 commit using its firmware and probe binaries.
 
 Supply a static firmware binary, a static deviceapi test binary, and an existing
 pinned local container image. Creates only test-owned /run and /usr/local/lib directories, network and unit
@@ -39,7 +41,7 @@ def main():
     repository = Path(__file__).resolve().parent.parent
     release_path = repository / "internal/workloadrelease/testdata/manifest.json"
     if run(args.firmware, "validate-release", "--release", str(release_path), check=False).returncode:
-        raise SystemExit("the supplied firmware cannot run the test workload manifest")
+        raise SystemExit("the supplied firmware cannot run the test workload manifest from the SELF-16 checkout")
     root = Path(tempfile.mkdtemp(prefix="af-api-service-", dir="/run"))
     state = root / "state"
     state.mkdir(mode=0o700)

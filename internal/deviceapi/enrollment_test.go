@@ -15,7 +15,11 @@ var exampleCode = "enrc_" + strings.Repeat("A", 43)
 func testCodes(t *testing.T) (*CodeStore, *time.Time) {
 	t.Helper()
 	now := time.Unix(1_800_000_000, 0)
-	return &CodeStore{dir: t.TempDir(), now: func() time.Time { return now }}, &now
+	directory := filepath.Join(t.TempDir(), "codes")
+	if err := os.Mkdir(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	return &CodeStore{dir: directory, now: func() time.Time { return now }}, &now
 }
 
 func TestEnrollmentCodeBounds(t *testing.T) {
@@ -178,5 +182,32 @@ func TestEnrollmentCodeRoutes(t *testing.T) {
 		if strings.Contains(string(b), "enrc_") {
 			t.Fatal("code in diagnostics")
 		}
+	}
+}
+
+func TestLateWorkloadDeletePreservesNewEnrollmentCode(t *testing.T) {
+	host, _ := testCodes(t)
+	workload := &CodeStore{dir: host.dir, now: host.now}
+	if err := host.Put(exampleCode); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := workload.getForWorkload(); !ok || got != exampleCode {
+		t.Fatal("first code was not delivered")
+	}
+	if err := host.Delete(); err != nil {
+		t.Fatal(err)
+	}
+	replacement := strings.Repeat("B", MaxEnrollmentCode)
+	if err := host.Put(replacement); err != nil {
+		t.Fatal(err)
+	}
+	if err := workload.deleteForWorkload(); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := workload.getForWorkload(); !ok || got != replacement {
+		t.Fatal("a delayed delete spent the replacement code")
+	}
+	if err := workload.deleteForWorkload(); err != nil || host.Held() {
+		t.Fatalf("the workload could not delete the replacement after reading it: %v", err)
 	}
 }

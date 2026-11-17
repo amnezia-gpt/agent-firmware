@@ -13,8 +13,6 @@ import (
 	"github.com/amnezia-gpt/agent-firmware/internal/service"
 )
 
-const testCode = "enrc_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopq"
-
 // host is a private tree standing in for the system paths, with recording fakes.
 type host struct {
 	t                  *testing.T
@@ -24,7 +22,6 @@ type host struct {
 	enabled            bool
 	fragment           string
 	fail               map[string]bool
-	code               string
 	writeEngineAddress bool
 }
 
@@ -100,11 +97,11 @@ func (h *host) Fragment(context.Context) (string, error) {
 }
 func (h *host) Preflight(context.Context) error { return h.result("preflight") }
 func (h *host) Existing() error                 { return h.result("existing") }
-func (h *host) Configure(context.Context) error {
-	if err := h.result("configure"); err != nil {
+func (h *host) Manufacture(context.Context) error {
+	if err := h.result("manufacture"); err != nil {
 		return err
 	}
-	// The firmware replaces its accepted configuration; the installer only records the previous one.
+	// The firmware replaces its device record; the installer only records the previous one.
 	if err := os.MkdirAll(h.layout.State, 0o700); err != nil {
 		return err
 	}
@@ -116,16 +113,8 @@ func (h *host) Configure(context.Context) error {
 			}
 		}
 	}
-	return replace(filepath.Join(h.layout.State, "accepted.json"), []byte("new\n"), 0o600)
+	return replace(filepath.Join(h.layout.State, hostplatform.DeviceState), []byte("new\n"), 0o600)
 }
-func (h *host) HoldCode(code string) error {
-	if err := h.result("hold-code"); err != nil {
-		return err
-	}
-	h.code = code
-	return nil
-}
-func (h *host) ClearCode() { h.calls = append(h.calls, "clear-code"); h.code = "" }
 func (h *host) result(name string) error {
 	h.calls = append(h.calls, name)
 	if h.fail[name] {
@@ -134,14 +123,14 @@ func (h *host) result(name string) error {
 	return nil
 }
 
-func (h *host) install(content, code string) error {
+func (h *host) install(content string) error {
 	h.t.Helper()
 	binary := filepath.Join(h.t.TempDir(), "agent-firmware-linux-amd64")
 	if err := os.WriteFile(binary, []byte(content), 0o700); err != nil {
 		h.t.Fatal(err)
 	}
 	h.calls = nil
-	return Install(context.Background(), Request{Layout: h.layout, Binary: binary, Code: code, Services: h, Firmware: h})
+	return Install(context.Background(), Request{Layout: h.layout, Binary: binary, Services: h, Firmware: h})
 }
 
 func (h *host) read(path string) string {
@@ -175,10 +164,10 @@ func (h *host) order(want ...string) {
 
 func TestFreshInstallation(t *testing.T) {
 	h := newHost(t)
-	if err := h.install("version one", testCode); err != nil {
+	if err := h.install("version one"); err != nil {
 		t.Fatal(err)
 	}
-	if h.current() != "version one" || !h.active || !h.enabled || h.code != testCode {
+	if h.current() != "version one" || !h.active || !h.enabled {
 		t.Fatalf("current=%q active=%v enabled=%v", h.current(), h.active, h.enabled)
 	}
 	if target, _ := os.Readlink(h.layout.Wrapper); target != filepath.Join(h.layout.Base, "current", "agent-firmware") {
@@ -191,30 +180,21 @@ func TestFreshInstallation(t *testing.T) {
 	if info, _ := os.Stat(h.layout.Unit); info.Mode().Perm() != 0o644 {
 		t.Fatal("unit mode")
 	}
-	// The code is held after enable and before start, and is in no installer-owned file.
-	h.order("preflight", "configure", "systemd daemon-reload", "systemd enable", "hold-code", "systemd start")
+	h.order("preflight", "manufacture", "systemd daemon-reload", "systemd enable", "systemd start")
 	h.noTransaction()
-	_ = filepath.WalkDir(h.layout.Base, func(path string, entry os.DirEntry, _ error) error {
-		if entry != nil && entry.Type().IsRegular() && strings.Contains(h.read(path), testCode) {
-			t.Fatalf("code stored in %s", path)
-		}
-		return nil
-	})
-	if strings.Contains(unit, testCode) {
-		t.Fatal("code in unit")
-	}
+
 }
 
 func TestReinstallationAndUpgrade(t *testing.T) {
 	h := newHost(t)
-	if err := h.install("version one", ""); err != nil {
+	if err := h.install("version one"); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.install("version one", ""); err != nil {
+	if err := h.install("version one"); err != nil {
 		t.Fatal(err)
 	}
-	h.order("systemd stop", "configure", "systemd start")
-	if err := h.install("version two", ""); err != nil {
+	h.order("systemd stop", "manufacture", "systemd start")
+	if err := h.install("version two"); err != nil {
 		t.Fatal(err)
 	}
 	if h.current() != "version two" || !h.active {
@@ -232,20 +212,20 @@ func TestFailedUpgradeReturnsThePreviousInstallation(t *testing.T) {
 		name string
 		want error
 	}{
-		{"configure", ErrConfigure}, {"daemon-reload", ErrReload},
-		{"enable", ErrEnable}, {"hold-code", ErrCode}, {"dies", ErrStart},
+		{"manufacture", ErrConfigure}, {"daemon-reload", ErrReload},
+		{"enable", ErrEnable}, {"dies", ErrStart},
 	} {
 		t.Run(failure.name, func(t *testing.T) {
 			h := newHost(t)
-			if err := h.install("version one", ""); err != nil {
+			if err := h.install("version one"); err != nil {
 				t.Fatal(err)
 			}
 			unit := h.read(h.layout.Unit)
-			if err := os.WriteFile(filepath.Join(h.layout.State, "accepted.json"), []byte("old\n"), 0o600); err != nil {
+			if err := os.WriteFile(filepath.Join(h.layout.State, hostplatform.DeviceState), []byte("old\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			h.fail[failure.name] = true
-			err := h.install("version two", testCode)
+			err := h.install("version two")
 			// The first failing call is the installation step; recovery repeats daemon-reload and enable.
 			if failure.name == "daemon-reload" || failure.name == "enable" {
 				if err != ErrRecovery {
@@ -256,10 +236,10 @@ func TestFailedUpgradeReturnsThePreviousInstallation(t *testing.T) {
 			if err != failure.want {
 				t.Fatal(err)
 			}
-			if h.current() != "version one" || h.read(h.layout.Unit) != unit || !h.active || !h.enabled || h.code != "" {
-				t.Fatalf("not restored: current=%q active=%v code=%q", h.current(), h.active, h.code)
+			if h.current() != "version one" || h.read(h.layout.Unit) != unit || !h.active || !h.enabled {
+				t.Fatalf("not restored: current=%q active=%v", h.current(), h.active)
 			}
-			if h.read(filepath.Join(h.layout.State, "accepted.json")) != "old\n" {
+			if h.read(filepath.Join(h.layout.State, hostplatform.DeviceState)) != "old\n" {
 				t.Fatal("configuration not restored")
 			}
 			h.noTransaction()
@@ -269,7 +249,7 @@ func TestFailedUpgradeReturnsThePreviousInstallation(t *testing.T) {
 
 func TestInterruptedTransactionIsRecoveredByTheNextRun(t *testing.T) {
 	h := newHost(t)
-	if err := h.install("version one", ""); err != nil {
+	if err := h.install("version one"); err != nil {
 		t.Fatal(err)
 	}
 	// A killed installer leaves a prepared transaction and a half-switched host.
@@ -281,7 +261,7 @@ func TestInterruptedTransactionIsRecoveredByTheNextRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.active = false
-	if err := h.install("version two", ""); err != nil {
+	if err := h.install("version two"); err != nil {
 		t.Fatal(err)
 	}
 	h.order("systemd stop", "systemd daemon-reload", "systemd enable", "systemd start", "preflight")
@@ -295,7 +275,7 @@ func TestInterruptedTransactionIsRecoveredByTheNextRun(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(r.transaction, "format"), []byte("1\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.install("version three", ""); err != ErrRecovery {
+	if err := h.install("version three"); err != ErrRecovery {
 		t.Fatal(err)
 	}
 }
@@ -320,11 +300,11 @@ func TestForeignResourcesAreRefusedBeforeAnyChange(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			h := newHost(t)
 			test.setup(h)
-			if err := h.install("version one", testCode); err != test.want {
+			if err := h.install("version one"); err != test.want {
 				t.Fatal(err)
 			}
 			for _, call := range h.calls {
-				if strings.HasPrefix(call, "systemd ") || call == "configure" || call == "hold-code" {
+				if strings.HasPrefix(call, "systemd ") || call == "manufacture" || call == "hold-code" {
 					t.Fatalf("changed the host: %v", h.calls)
 				}
 			}
@@ -338,12 +318,12 @@ func TestForeignResourcesAreRefusedBeforeAnyChange(t *testing.T) {
 func TestConcurrentInstallationIsRefused(t *testing.T) {
 	h := newHost(t)
 	r := &run{Request: Request{Layout: h.layout}}
-	unlock, err := r.lock()
+	unlock, err := Lock(r.Layout)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer unlock()
-	if err := h.install("version one", ""); err != ErrBusy {
+	if err := h.install("version one"); err != ErrBusy {
 		t.Fatal(err)
 	}
 }
@@ -362,19 +342,19 @@ func TestInterruptionRollsBack(t *testing.T) {
 	}
 }
 
-func TestProgressNamesTheStepsAndNeverTheCode(t *testing.T) {
+func TestProgressNamesTheSteps(t *testing.T) {
 	h := newHost(t)
 	binary := filepath.Join(t.TempDir(), "binary")
 	if err := os.WriteFile(binary, []byte("version one"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	var lines []string
-	request := Request{Layout: h.layout, Binary: binary, Code: testCode, Services: h, Firmware: h, Progress: func(m string) { lines = append(lines, m) }}
+	request := Request{Layout: h.layout, Binary: binary, Services: h, Firmware: h, Progress: func(m string) { lines = append(lines, m) }}
 	if err := Install(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
 	got := strings.Join(lines, "|")
-	if !strings.HasPrefix(got, "Checking the host and Docker|Installing the firmware service|Starting the service") || strings.Contains(got, testCode) || strings.Contains(got, "failed") {
+	if !strings.HasPrefix(got, "Checking the host and preparing workload images|Installing the firmware service|Starting the firmware service") || strings.Contains(got, "failed") {
 		t.Fatal(got)
 	}
 	// A failed start says that the previous state is being restored.
@@ -401,12 +381,12 @@ func TestFailedInstallRollsBackOnlyNewEngineAddress(t *testing.T) {
 			h.writeEngineAddress = true
 			path := filepath.Join(h.layout.State, hostplatform.EngineState)
 			if existing {
-				if err := h.install("version one", ""); err != nil {
+				if err := h.install("version one"); err != nil {
 					t.Fatal(err)
 				}
 			}
 			h.fail["dies"] = true
-			if err := h.install("version two", ""); err != ErrStart {
+			if err := h.install("version two"); err != ErrStart {
 				t.Fatalf("installation error = %v", err)
 			}
 			if existing {

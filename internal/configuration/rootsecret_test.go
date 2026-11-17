@@ -11,8 +11,8 @@ func TestRootSecretIsBoundToAcceptedState(t *testing.T) {
 	for _, damage := range []string{"missing", "short", "different", "mode", "symlink"} {
 		t.Run(damage, func(t *testing.T) {
 			store := testStore(t)
-			input := testInput(t)
-			if _, err := store.Save(input); err != nil {
+			input := testDevice(t)
+			if _, err := store.Manufacture(input, nil); err != nil {
 				t.Fatal(err)
 			}
 			path := filepath.Join(store.Path, "root-secret")
@@ -20,7 +20,7 @@ func TestRootSecretIsBoundToAcceptedState(t *testing.T) {
 			if err != nil || len(key) != 32 {
 				t.Fatalf("root secret was not created: %v", err)
 			}
-			if _, err := store.Save(input); err != nil {
+			if _, err := store.Manufacture(input, nil); err != nil {
 				t.Fatal(err)
 			}
 			if again, err := os.ReadFile(path); err != nil || !bytes.Equal(key, again) {
@@ -44,10 +44,10 @@ func TestRootSecretIsBoundToAcceptedState(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := store.Load(); err == nil {
+			if _, err := store.LoadDevice(); err == nil {
 				t.Fatal("accepted state with damaged root secret")
 			}
-			if _, err := store.Save(input); err == nil {
+			if _, err := store.Manufacture(input, nil); err == nil {
 				t.Fatal("saved over damaged root secret")
 			}
 			if damage == "missing" {
@@ -61,14 +61,14 @@ func TestRootSecretIsBoundToAcceptedState(t *testing.T) {
 
 func TestBootstrapCheckRunsUnderStateLockBeforeCreatingSecret(t *testing.T) {
 	store := testStore(t)
-	input := testInput(t)
-	store.BootstrapCheck = func(*Session, *Input) error {
+	input := testDevice(t)
+	guard := func(*Session) error {
 		if err := store.Exclusive(func(*Session) error { return nil }); err != ErrBusy {
 			t.Fatalf("bootstrap check outside state lock: %v", err)
 		}
 		return ErrRootSecret
 	}
-	if _, err := store.Save(input); err != ErrRootSecret {
+	if _, err := store.Manufacture(input, guard); err != ErrRootSecret {
 		t.Fatalf("bootstrap refusal: %v", err)
 	}
 	if _, err := os.Lstat(filepath.Join(store.Path, "root-secret")); !os.IsNotExist(err) {

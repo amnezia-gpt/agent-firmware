@@ -3,37 +3,23 @@
 package configuration
 
 import (
-	"bytes"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
 
-	"github.com/amnezia-gpt/agent-firmware/internal/host"
 	"github.com/amnezia-gpt/agent-firmware/internal/privatefile"
-	"github.com/amnezia-gpt/agent-firmware/internal/strictjson"
 )
 
 const MaxStateBytes = 132 * 1024
 
 // Store operates in a caller-selected private directory. CLI callers must be root.
 type Store struct {
-	Path string
-	// BootstrapCheck checks for retained external state before first publication.
-	BootstrapCheck func(*Session, *Input) error
-	beforeRename   func() error
-	syncDirectory  func(*os.File) error
-}
-
-type record struct {
-	SchemaVersion   int    `json:"schema_version"`
-	Generation      string `json:"generation"`
-	Profile         []byte `json:"backend_profile"`
-	Release         []byte `json:"workload_release"`
-	RootFingerprint string `json:"root_secret_sha256"`
+	Path          string
+	beforeRename  func() error
+	syncDirectory func(*os.File) error
 }
 
 func (s Store) root(create bool) (*os.Root, error) {
@@ -93,8 +79,13 @@ func openFile(root *os.Root, name string, flags int) (*os.File, error) {
 	return file, nil
 }
 
-func load(root *os.Root) (*Input, error) {
-	f, err := openFile(root, host.AcceptedState, os.O_RDONLY)
+type Snapshot struct {
+	Device     *Device
+	Enrollment *Enrollment
+}
+
+func readRecord(root *os.Root, name string) ([]byte, error) {
+	f, err := openFile(root, name, os.O_RDONLY)
 	if err != nil {
 		return nil, err
 	}
@@ -106,94 +97,37 @@ func load(root *os.Root) (*Input, error) {
 	if len(data) > MaxStateBytes {
 		return nil, ErrCorrupt
 	}
-	fields, ok := strictjson.Object(data, "schema_version", "generation", "backend_profile", "workload_release", "root_secret_sha256")
-	if !ok || string(bytes.TrimSpace(fields["schema_version"])) != "2" {
-		return nil, ErrCorrupt
-	}
-	var stored record
-	if json.Unmarshal(data, &stored) != nil {
-		return nil, ErrCorrupt
-	}
-	input, err := Parse(bytes.NewReader(stored.Profile), bytes.NewReader(stored.Release))
-	if err != nil || input.Generation() != stored.Generation {
-		return nil, ErrCorrupt
-	}
-	secret, err := checkedRootSecret(root, stored.RootFingerprint)
-	if err != nil {
-		return nil, err
-	}
-	clear(secret)
-	input.rootFingerprint = stored.RootFingerprint
-	return input, nil
+	return data, nil
 }
 
-// Load never creates storage and validates the complete accepted snapshot.
-func (s Store) Load() (*Input, error) {
+func loadSnapshot(root *os.Root) (Snapshot, error) {
+	device, err := loadDevice(root)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	enrollment, err := loadEnrollment(root)
+	if err != nil && !errors.Is(err, ErrMissing) {
+		return Snapshot{}, err
+	}
+	return Snapshot{Device: device, Enrollment: enrollment}, nil
+}
+
+func (s Store) Snapshot() (Snapshot, error) {
+	root, err := s.root(false)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	defer root.Close()
+	return loadSnapshot(root)
+}
+
+func (s Store) LoadDevice() (*Device, error) {
 	root, err := s.root(false)
 	if err != nil {
 		return nil, err
 	}
 	defer root.Close()
-	return load(root)
-}
-
-// Save returns changed only after the complete state is durably acknowledged.
-// ErrUncertain means the accepted generation could not be durably acknowledged.
-func (s Store) Save(input *Input) (bool, error) {
-	if input == nil || input.generation == "" {
-		return false, ErrInvalid
-	}
-	root, err := s.root(true)
-	if err != nil {
-		return false, err
-	}
-	defer root.Close()
-	lock, err := operationLock(root)
-	if err != nil {
-		return false, err
-	}
-	defer lock.Close()
-	session := &Session{store: s, root: root}
-	if pending, err := session.Read(); err != nil {
-		return false, err
-	} else if len(pending) > 0 {
-		return false, ErrPending
-	}
-	old, err := load(root)
-	if err != nil && !errors.Is(err, ErrMissing) {
-		return false, err
-	}
-	var fingerprint string
-	if old != nil {
-		if old.profile.ID != input.profile.ID || old.profile.AuthIssuer != input.profile.AuthIssuer {
-			return false, ErrIdentityConflict
-		}
-		if old.generation == input.generation {
-			return false, s.synchronize(root)
-		}
-		fingerprint = old.rootFingerprint
-	} else {
-		if s.BootstrapCheck != nil {
-			if err := s.BootstrapCheck(session, input); err != nil {
-				return false, err
-			}
-		}
-		fingerprint, err = initializeRootSecret(root)
-		if err != nil {
-			return false, err
-		}
-	}
-	data, err := json.Marshal(record{
-		SchemaVersion: 2, Generation: input.generation, Profile: input.profileBytes,
-		Release: input.releaseBytes, RootFingerprint: fingerprint,
-	})
-	if err != nil {
-		return false, ErrWrite
-	}
-	if err := s.atomic(root, host.AcceptedState, data); err != nil {
-		return false, err
-	}
-	return true, nil
+	return loadDevice(root)
 }
 
 func (s Store) atomic(root *os.Root, target string, data []byte) error {

@@ -28,16 +28,16 @@ const (
 	ErrUncertain        Error = "state_commit_uncertain"
 	ErrRootSecret       Error = "keystore_unavailable"
 	ErrIdentityConflict Error = "identity_configuration_conflict"
+	ErrLegacy           Error = "legacy_state_layout"
 )
 
 // Input can only be constructed by validating both supplied documents.
 type Input struct {
-	profile         backendprofile.Profile
-	release         workloadrelease.Release
-	profileBytes    []byte
-	releaseBytes    []byte
-	generation      string
-	rootFingerprint string
+	profile      backendprofile.Profile
+	release      workloadrelease.Release
+	profileBytes []byte
+	releaseBytes []byte
+	generation   string
 }
 
 func (i *Input) Generation() string               { return i.generation }
@@ -52,28 +52,29 @@ func Parse(profile, release io.Reader) (*Input, error) {
 	if len(p) > backendprofile.MaxProfileBytes {
 		return nil, backendprofile.ErrTooLarge
 	}
-	r, err := io.ReadAll(io.LimitReader(release, workloadrelease.MaxBytes+1))
-	if err != nil {
-		return nil, workloadrelease.ErrRead
-	}
-	if len(r) > workloadrelease.MaxBytes {
-		return nil, workloadrelease.ErrTooLarge
-	}
-	parsedProfile, err := backendprofile.Parse(bytes.NewReader(p))
+	device, err := ParseDevice(release)
 	if err != nil {
 		return nil, err
 	}
-	parsedRelease, err := workloadrelease.Parse(bytes.NewReader(r))
+	return device.WithProfile(p)
+}
+
+func (d *Device) WithProfile(data []byte) (*Input, error) {
+	parsed, err := backendprofile.Parse(bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}
+	return d.withProfile(parsed, data), nil
+}
+
+func (d *Device) withProfile(profile backendprofile.Profile, data []byte) *Input {
 	canonical, _ := json.Marshal(struct {
 		Profile backendprofile.Profile
 		Release workloadrelease.Release
-	}{parsedProfile, parsedRelease})
+	}{profile, d.release})
 	digest := sha256.Sum256(append([]byte("agent-firmware-config-v1\x00"), canonical...))
 	return &Input{
-		profile: parsedProfile, release: parsedRelease, profileBytes: p, releaseBytes: r,
+		profile: profile, release: d.release, profileBytes: data, releaseBytes: d.raw,
 		generation: "sha256:" + hex.EncodeToString(digest[:]),
-	}, nil
+	}
 }

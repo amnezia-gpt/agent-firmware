@@ -8,11 +8,11 @@ The accepted v3 contract and public vectors live in
 
 ## Software root secret
 
-First configuration generates a 32-byte random secret in
+The first successful manufacture generates a 32-byte random secret in
 `/var/lib/agent-firmware/root-secret` with mode 0600 and firmware ownership.
 This happens inside the configuration writer lock after checking for retained
-workload volumes. The accepted record pins the SHA-256 fingerprint of the
-secret. Existing accepted state with a missing, unsafe, truncated or different
+workload volumes. The device record pins the SHA-256 fingerprint of the
+secret. An existing device record with a missing, unsafe, truncated or different
 secret fails with `keystore_unavailable`. The firmware never regenerates the
 secret over existing state. Earlier installations must be reinstalled.
 

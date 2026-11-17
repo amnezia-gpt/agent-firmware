@@ -146,14 +146,14 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request) {
 		case r.URL.Path == "/v1/capabilities":
 			h.capabilities(w)
 		case method == "DELETE":
-			// Gateway removes the code once Auth answered; repeating is harmless.
-			if h.enrollment.Delete() != nil {
+			// The workload acknowledges the code it received.
+			if h.enrollment.deleteForWorkload() != nil {
 				failure(w, 500, "internal_error", false)
 				return
 			}
 			reply(w, 204, nil)
 		default:
-			code, held := h.enrollment.Get()
+			code, held := h.enrollment.getForWorkload()
 			if !held {
 				failure(w, 404, "not_found", false)
 				return

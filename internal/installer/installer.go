@@ -1,6 +1,6 @@
 // Package installer places the running firmware binary on the host as a
 // host service inside one recoverable transaction: a failed or interrupted
-// installation returns the previous version, unit and accepted configuration.
+// installation returns the previous version, unit and device record.
 // Host preparation (platform, Docker, download) belongs to the bootstrap
 // script; everything from here on is firmware responsibility.
 package installer
@@ -10,12 +10,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/amnezia-gpt/agent-firmware/internal/configuration"
 	hostplatform "github.com/amnezia-gpt/agent-firmware/internal/host"
 	"github.com/amnezia-gpt/agent-firmware/internal/privatefile"
 )
@@ -35,7 +37,6 @@ const (
 	ErrDocker      Error = "docker_prerequisite_failed"
 	ErrExisting    Error = "invalid_existing_configuration"
 	ErrConfigure   Error = "configuration_rejected"
-	ErrCode        Error = "enrollment_code_rejected"
 	ErrSystemd     Error = "systemd_unavailable"
 	ErrStop        Error = "service_stop_failed"
 	ErrReload      Error = "service_reload_failed"
@@ -46,7 +47,7 @@ const (
 const (
 	managedMarker = "agent-firmware-installer-v1"
 	// The transaction layout is versioned so a later firmware never guesses at an older one.
-	transactionFormat = "2"
+	transactionFormat = "3"
 	maxBinary         = 64 << 20
 )
 
@@ -66,18 +67,15 @@ type ServiceManager interface {
 // Firmware is what the installer asks of the firmware's own state handling.
 type Firmware interface {
 	Preflight(ctx context.Context) error
-	// Existing checks the retained configuration of an earlier installation, if any.
+	// Existing validates retained device and enrollment state, if any.
 	Existing() error
-	Configure(context.Context) error
-	HoldCode(code string) error
-	ClearCode()
+	Manufacture(context.Context) error
 }
 
-// Request is one installation of the binary at Binary. Code may be empty.
+// Request is one installation of the binary at Binary. The request is independent of enrollment.
 type Request struct {
 	Layout   hostplatform.Layout
 	Binary   string
-	Code     string
 	Services ServiceManager
 	Firmware Firmware
 	// Progress, when set, receives short human-readable lines about the current step.
@@ -131,7 +129,7 @@ func Install(ctx context.Context, request Request) (err error) {
 			return ErrConflict
 		}
 	}
-	unlock, err := r.lock()
+	unlock, err := Lock(l)
 	if err != nil {
 		return err
 	}
@@ -150,12 +148,12 @@ func Install(ctx context.Context, request Request) (err error) {
 	if err != nil {
 		return err
 	}
-	r.say("Checking the host and Docker")
-	if r.Firmware.Preflight(ctx) != nil {
-		return ErrDocker
-	}
 	if err := r.conflicts(ctx); err != nil {
 		return err
+	}
+	r.say("Checking the host and preparing workload images")
+	if r.Firmware.Preflight(ctx) != nil {
+		return ErrDocker
 	}
 	if ctx.Err() != nil {
 		return ErrInterrupted
@@ -183,16 +181,11 @@ func Install(ctx context.Context, request Request) (err error) {
 		return err
 	}
 	// From here every failure rolls back to the recorded previous installation.
-	codeHeld := false
 	defer func() {
 		if err == nil {
 			return
 		}
 		r.say("Installation failed, restoring the previous state")
-		if codeHeld {
-			// A failed installation must not leave a bearer secret behind.
-			r.Firmware.ClearCode()
-		}
 		if r.recover() != nil {
 			err = ErrRecovery
 		}
@@ -212,8 +205,11 @@ func Install(ctx context.Context, request Request) (err error) {
 			return err
 		}
 	}
-	if err = step(ErrConfigure, func() error { return r.Firmware.Configure(ctx) }); err != nil {
-		return err
+	if ctx.Err() != nil {
+		return ErrInterrupted
+	}
+	if err = r.Firmware.Manufacture(ctx); err != nil {
+		return stateError(err, ErrConfigure)
 	}
 	if err = step(ErrWrite, func() error {
 		if r.pointer("releases/"+r.digest) != nil {
@@ -237,14 +233,7 @@ func Install(ctx context.Context, request Request) (err error) {
 	if err = step(ErrEnable, func() error { return r.Services.SetEnabled(ctx, true) }); err != nil {
 		return err
 	}
-	if r.Code != "" {
-		// Held before the service starts so Gateway finds it on its first start.
-		codeHeld = true
-		if err = step(ErrCode, func() error { return r.Firmware.HoldCode(r.Code) }); err != nil {
-			return err
-		}
-	}
-	r.say("Starting the service and downloading the workload images, this can take several minutes")
+	r.say("Starting the firmware service")
 	stopWaiting := r.waiting("Still starting, please wait")
 	defer stopWaiting()
 	if err = step(ErrStart, func() error {
@@ -262,10 +251,12 @@ func Install(ctx context.Context, request Request) (err error) {
 	return nil
 }
 
-func (r *run) lock() (func(), error) {
-	l := r.Layout
+// Lock serializes installs and enrollment attempts without blocking the daemon's
+// configuration lock while the caller waits for service readiness.
+func Lock(l hostplatform.Layout) (func(), error) {
+	r := run{Request: Request{Layout: l}}
 	if !lexists(l.Lock) {
-		if os.Mkdir(l.Lock, 0o700) != nil {
+		if err := os.Mkdir(l.Lock, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
 			return nil, ErrConflict
 		}
 	}
@@ -334,11 +325,19 @@ func (r *run) conflicts(ctx context.Context) error {
 		if !r.safeDir(l.State, 0o700) {
 			return ErrConflict
 		}
-		if r.Firmware.Existing() != nil {
-			return ErrExisting
+		if err := r.Firmware.Existing(); err != nil {
+			return stateError(err, ErrExisting)
 		}
 	}
 	return nil
+}
+
+func stateError(err error, fallback Error) error {
+	var stateErr configuration.Error
+	if errors.As(err, &stateErr) {
+		return stateErr
+	}
+	return fallback
 }
 
 func (r *run) placeVersion(releases string, binary []byte) error {
@@ -383,14 +382,14 @@ func (r *run) prepare(ctx context.Context) error {
 		data, err := os.ReadFile(l.Unit)
 		ok = ok && err == nil && record("unit", data) && record("had-unit", nil)
 	}
-	accepted := filepath.Join(l.State, hostplatform.AcceptedState)
-	if isFile(accepted) {
-		if !r.safeFile(accepted, 0o600) {
+	device := filepath.Join(l.State, hostplatform.DeviceState)
+	if isFile(device) {
+		if !r.safeFile(device, 0o600) {
 			_ = os.RemoveAll(t)
 			return ErrConflict
 		}
-		data, err := os.ReadFile(accepted)
-		ok = ok && err == nil && record("config", data) && record("had-config", nil)
+		data, err := os.ReadFile(device)
+		ok = ok && err == nil && record("device", data) && record("had-device", nil)
 	}
 	// Existing engine records are immutable. Only a newly published record
 	// needs to be removed during rollback.
@@ -460,19 +459,19 @@ func (r *run) recover() error {
 			return ErrRecovery
 		}
 	}
-	accepted := filepath.Join(l.State, hostplatform.AcceptedState)
+	device := filepath.Join(l.State, hostplatform.DeviceState)
 	switch {
 	case isFile(filepath.Join(l.State, hostplatform.OperationJournal)):
-		if !has("had-config") || !sameContent(filepath.Join(t, "config"), accepted) {
+		if !has("had-device") || !sameContent(filepath.Join(t, "device"), device) {
 			return ErrRecovery
 		}
-	case has("had-config"):
-		data, err := os.ReadFile(filepath.Join(t, "config"))
-		if err != nil || replace(accepted, data, 0o600) != nil {
+	case has("had-device"):
+		data, err := os.ReadFile(filepath.Join(t, "device"))
+		if err != nil || replace(device, data, 0o600) != nil {
 			return ErrRecovery
 		}
-	case isFile(accepted):
-		if !r.safeFile(accepted, 0o600) || os.Remove(accepted) != nil {
+	case isFile(device):
+		if !r.safeFile(device, 0o600) || os.Remove(device) != nil {
 			return ErrRecovery
 		}
 	}

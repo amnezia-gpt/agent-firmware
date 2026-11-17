@@ -42,8 +42,8 @@ var (
 		}
 		return io.ReadAll(io.LimitReader(response.Body, maxUpdateScript+1))
 	}
-	runUpdateScript = func(ctx context.Context, script, issuer string, stdout, stderr io.Writer) error {
-		command := exec.CommandContext(ctx, "sh", script, "--issuer", issuer)
+	runUpdateScript = func(ctx context.Context, script string, stdout, stderr io.Writer) error {
+		command := exec.CommandContext(ctx, "sh", script)
 		command.Stdout, command.Stderr = stdout, stderr
 		return command.Run()
 	}
@@ -53,8 +53,7 @@ var (
 //
 //	agent-firmware update
 //
-// It takes no arguments and no code. The issuer is the one this installation
-// was made for; identity, sign-in and data are kept, as by any reinstallation.
+// The bootstrap takes no arguments or standard input.
 func runUpdate(args []string, stdout, stderr io.Writer) int {
 	if len(args) != 0 {
 		return report(stderr, "invalid_usage", 2)
@@ -62,17 +61,17 @@ func runUpdate(args []string, stdout, stderr io.Writer) int {
 	if os.Geteuid() != 0 {
 		return report(stderr, "root_required", 1)
 	}
-	accepted, err := (configuration.Store{Path: defaultStateDir}).Load()
+	_, err := (configuration.Store{Path: defaultStateDir}).LoadDevice()
 	if err != nil {
 		return report(stderr, err.Error(), 1)
 	}
-	return updateFrom(accepted.Profile().AuthIssuer, stdout, stderr)
+	return updateFrom(stdout, stderr)
 }
 
 // updateDirectory holds the downloaded script; it is read by sh, so a noexec mount does not matter.
 var updateDirectory = hostLayout.UpdateDirectory
 
-func updateFrom(issuer string, stdout, stderr io.Writer) int {
+func updateFrom(stdout, stderr io.Writer) int {
 	ctx := context.Background()
 	_, _ = io.WriteString(stderr, "agent-firmware: Downloading the latest release\n")
 	script, err := fetchUpdateScript(ctx)
@@ -89,7 +88,7 @@ func updateFrom(issuer string, stdout, stderr io.Writer) int {
 		return report(stderr, "update_write_failed", 1)
 	}
 	// The script and the installer report their own progress, result and error.
-	if runUpdateScript(ctx, path, issuer, stdout, stderr) != nil {
+	if runUpdateScript(ctx, path, stdout, stderr) != nil {
 		return 1
 	}
 	return 0

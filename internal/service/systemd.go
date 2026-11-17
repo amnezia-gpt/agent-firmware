@@ -53,7 +53,7 @@ func (Systemd) do(ctx context.Context, verb string) error {
 	if verb != "daemon-reload" {
 		args = append(args, host.ServiceName)
 	}
-	// A start waits for the first convergence, which may pull images.
+	// An enrolled device waits for its first convergence before signaling readiness.
 	_, err := systemctl(ctx, 1400*time.Second, args...)
 	return err
 }
@@ -104,7 +104,7 @@ RuntimeDirectory=` + filepath.Base(s.Layout.Runtime) + `
 RuntimeDirectoryMode=0700
 RuntimeDirectoryPreserve=yes
 ReadWritePaths=` + s.Layout.State + " " + s.Layout.Runtime + `
-RestrictAddressFamilies=AF_UNIX
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 LockPersonality=true
 LimitNOFILE=4096
 
