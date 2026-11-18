@@ -1,9 +1,8 @@
 # Workload release pinned by the firmware
 
-The release job requires a published schema 3 workload release manifest and
-a firmware binary that serves the Device API the manifest declares. The checked
-in pin in this worktree is from the preceding step. Replacing it requires the
-matching publication from the workload producer.
+The release job requires a published schema 4 workload release manifest and
+a firmware binary that serves the Device API the manifest declares. The current
+pin is the published workload v0.5.0 manifest.
 
 Configure `WORKLOAD_MANIFEST_URL` for the exact published manifest asset.
 The workflow downloads it over HTTPS and compares its bytes with
@@ -16,5 +15,5 @@ published release carries the original manifest bytes and the installation
 script uses the SHA-256 of those bytes.
 
 The accepted schema and fixtures are tracked in
-[SELF-21](../.agents/plans/SELF-21/DESIGN.md). Device API v3 transport is
+[SELF-24](../.agents/plans/SELF-24/DESIGN.md). Device API v3 transport is
 tracked in [SELF-19](../.agents/plans/SELF-19/ISSUE.md).

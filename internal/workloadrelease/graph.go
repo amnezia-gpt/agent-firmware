@@ -22,7 +22,7 @@ func (r Release) validReferences() bool {
 		}
 		mounted := make(map[string]bool)
 		for i, volume := range service.Volumes {
-			if mounted[volume.Source] || !slices.Contains(r.Volumes, volume.Source) || path.Clean(volume.Target) != volume.Target ||
+			if _, declared := r.Volumes[volume.Source]; mounted[volume.Source] || !declared || path.Clean(volume.Target) != volume.Target ||
 				volume.Target == "/tmp" || strings.HasPrefix(volume.Target, "/tmp/") {
 				return false
 			}

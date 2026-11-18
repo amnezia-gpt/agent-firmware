@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/signal"
@@ -67,6 +68,9 @@ func runStateCommand(args []string, stdout, stderr io.Writer) int {
 	if args[0] == "status" {
 		return showStatus(store, stdout, stderr)
 	}
+	if err := store.CheckLegacy(); err != nil {
+		return report(stderr, err.Error(), 1)
+	}
 	parent, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if args[0] == "serve" {
@@ -82,6 +86,19 @@ func runStateCommand(args []string, stdout, stderr io.Writer) int {
 	return respond(stdout, stderr, result)
 }
 
+var listStatusData = func(ctx context.Context, store configuration.Store) ([]dockerengine.VolumeInfo, error) {
+	address, err := store.EngineAddress()
+	if err != nil {
+		return nil, err
+	}
+	engine, err := dockerengine.New(address)
+	if err != nil {
+		return nil, err
+	}
+	defer engine.Close()
+	return engine.RetainedData(ctx, "")
+}
+
 func showStatus(store configuration.Store, stdout, stderr io.Writer) int {
 	snapshot, err := localState(store)
 	if err != nil {
@@ -94,6 +111,28 @@ func showStatus(store configuration.Store, stdout, stderr io.Writer) int {
 	}
 	if state == enrolled {
 		message += "Issuer " + snapshot.Enrollment.Profile.AuthIssuer + "\n"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	volumes, err := listStatusData(ctx, store)
+	switch {
+	case err != nil:
+		message += "User data: unknown (local engine unavailable)\n"
+	case len(volumes) == 0:
+		message += "User data: []\n"
+	default:
+		message += "User data:\n"
+		for _, volume := range volumes {
+			issuer := volume.Issuer
+			if issuer == "" {
+				issuer = "unknown"
+			}
+			created := volume.CreatedAt
+			if created == "" {
+				created = "unknown"
+			}
+			message += fmt.Sprintf("  %s  %s  %s\n", issuer, volume.Name, created)
+		}
 	}
 	if n, err := io.WriteString(stdout, message); err != nil || n != len(message) {
 		return report(stderr, "output_failed", 1)

@@ -45,6 +45,11 @@ cat > "$fx/assets/agent-firmware-linux-amd64" <<'SH'
 #!/bin/sh
 printf 'firmware %s\n' "$*" >> /run/af-bootstrap/calls
 case "$1" in
+ decommission)
+  case "$*" in "decommission --confirm"|"decommission --confirm --delete-data") : ;; *) exit 2 ;; esac
+  [ -z "$(cat)" ] || exit 2
+  [ ! -f /run/af-bootstrap/decommission-fails ] || { printf '{"error_code":"resource_conflict"}\n' >&2; exit 1; }
+  printf '{"state":"decommissioned","deregistration":"not_attempted"}\n'; exit 0 ;;
  validate-release)
   [ ! -f /run/af-bootstrap/check-fails ] || { printf '{"error_code":"unsupported_device_api"}\n' >&2; exit 1; }
   # Release validation is given an empty standard input.
@@ -77,24 +82,53 @@ no_secret() { ! grep -rqF "$secret" "$fx/calls" "$fx/stdout" "$fx/stderr" || { e
 installed() { grep -Eq "^firmware install --release /usr/local/lib/agent-firmware-bootstrap\.[A-Za-z0-9]+/workload-release.json$" "$fx/calls"; }
 not_installed() { ! grep -q '^firmware install' "$fx/calls" || { echo 'installer ran' >&2; exit 1; }; }
 
+# Help runs before stamp, root and host checks, even for unstamped scripts.
+run scripts/agent-firmware-install.sh --help
+[ "$code" = 0 ] && [ ! -s "$fx/stderr" ] && grep -qx 'agent-firmware-install.sh \[--decommission --confirm \[--delete-data\]\]' "$fx/stdout" || exit 1
+cp "$fx/stdout" "$fx/help"
+no_changes
+run scripts/agent-firmware-install.sh -h
+[ "$code" = 0 ] && cmp -s "$fx/help" "$fx/stdout" || exit 1
+su -s /bin/sh nobody -c 'sh /work/scripts/agent-firmware-install.sh --help' > "$fx/stdout"
+cmp -s "$fx/help" "$fx/stdout"
+no_changes
+
 # Unstamped and malformed stamps refuse before any change.
 run scripts/agent-firmware-install.sh; expect_error unreleased_script; no_changes
 stamp v0.1.0 short "$wsum"; run "$fx/bootstrap.sh"; expect_error unreleased_script; no_changes
 stamp v0.1.0 "$fsum" short; run "$fx/bootstrap.sh"; expect_error unreleased_script; no_changes
 stamp v0.1.0 "$fsum" "$wsum"
 
-# Usage: the script rejects every argument.
+# Usage: decommission is the only argument form.
 run "$fx/bootstrap.sh" --issuer https://auth.example.test; expect_error invalid_usage; no_changes
 run "$fx/bootstrap.sh" --enrollment-code-stdin; expect_error invalid_usage; no_changes
 run "$fx/bootstrap.sh" --enrollment-code-file "$fx/calls"; expect_error invalid_usage; no_changes
+run "$fx/bootstrap.sh" --decommission; expect_error invalid_usage; no_changes
+grep -qx 'agent-firmware-install: run with --help for usage' "$fx/stderr"
 
 # Unsupported system refuses before any change.
 printf 'ID=debian\nVERSION_ID="12"\n' > /etc/os-release
 run "$fx/bootstrap.sh"; expect_error unsupported_system; no_changes
 printf 'ID=ubuntu\nVERSION_ID="24.04"\n' > /etc/os-release
 
-# An incompatible release fails before Docker is touched and the error is reported once.
+# Decommission uses only the verified binary, even without Docker or a workload asset.
 rm -f /usr/bin/docker "$fx/docker-active"
+mv "$fx/assets/workload-release.json" "$fx/workload-release.saved"
+run_piped "$secret" "$fx/bootstrap.sh" --decommission --confirm
+[ "$code" = 0 ] && [ "$(cat "$fx/stdout")" = '{"state":"decommissioned","deregistration":"not_attempted"}' ] || exit 1
+grep -qx 'firmware decommission --confirm' "$fx/calls"
+! grep -Eq '^(apt-get|systemctl|firmware validate-release)|workload-release.json' "$fx/calls" || exit 1
+not_installed; no_secret
+run "$fx/bootstrap.sh" --decommission --confirm --delete-data
+[ "$code" = 0 ] && grep -qx 'firmware decommission --confirm --delete-data' "$fx/calls" || exit 1
+not_installed
+run "$fx/bootstrap.sh" --decommission --delete-data; expect_error invalid_usage; no_changes
+touch "$fx/decommission-fails"
+run "$fx/bootstrap.sh" --decommission --confirm; expect_error resource_conflict; not_installed
+rm "$fx/decommission-fails"
+mv "$fx/workload-release.saved" "$fx/assets/workload-release.json"
+
+# An incompatible release fails before Docker is touched and the error is reported once.
 touch "$fx/check-fails"; run_piped "$secret" "$fx/bootstrap.sh"; expect_error unsupported_device_api
 grep -Eq '^firmware validate-release --release .*/workload-release.json$' "$fx/calls"
 ! grep -Eq '^(apt-get|systemctl enable)' "$fx/calls"; not_installed; no_secret

@@ -43,7 +43,7 @@ func TestCommandErrorsAreBoundedAndRedacted(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			code := run(test.args, test.input, &stdout, &stderr)
-			if code != test.code || stdout.Len() != 0 || stderr.String() != test.stderr {
+			if code != test.code || stdout.Len() != 0 || !strings.HasSuffix(stderr.String(), test.stderr) {
 				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 			}
 		})
@@ -72,7 +72,7 @@ func TestDiscoverProfileCommand(t *testing.T) {
 	} {
 		var stdout, stderr bytes.Buffer
 		code := run(test.args, strings.NewReader(""), &stdout, &stderr)
-		if code != test.code || stdout.String() != test.stdout || stderr.String() != test.stderr {
+		if code != test.code || stdout.String() != test.stdout || !strings.HasSuffix(stderr.String(), test.stderr) {
 			t.Fatalf("%v: exit=%d stdout=%q stderr=%q", test.args, code, stdout.String(), stderr.String())
 		}
 	}
@@ -116,6 +116,7 @@ func TestInputFileFailureDoesNotLeakPath(t *testing.T) {
 }
 
 func TestStateCommandsRequireRootBeforeReadingOrWriting(t *testing.T) {
+	stubStatusData(t)
 	for _, command := range []string{"status", "apply", "serve"} {
 		var stdout, stderr bytes.Buffer
 		state := filepath.Join(t.TempDir(), "private-state")
@@ -148,7 +149,7 @@ func TestRejectsAmbiguousCommandFlags(t *testing.T) {
 		{"configure", "--state-dir"}, {"status", "--unknown", "example"},
 	} {
 		var stdout, stderr bytes.Buffer
-		if code := run(args, strings.NewReader(""), &stdout, &stderr); code != 2 || stderr.String() != "{\"error_code\":\"invalid_usage\"}\n" {
+		if code := run(args, strings.NewReader(""), &stdout, &stderr); code != 2 || !strings.HasSuffix(stderr.String(), "{\"error_code\":\"invalid_usage\"}\n") {
 			t.Fatalf("exit=%d stderr=%q", code, stderr.String())
 		}
 	}

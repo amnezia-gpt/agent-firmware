@@ -18,28 +18,18 @@ import (
 
 const errAPIServe deviceapi.Error = "device_api_requires_serve"
 
-var checkFreshWorkloadVolumes = func(ctx context.Context, session *configuration.Session, input *configuration.Input) error {
-	stack, err := workload.FromInput(input)
-	if err != nil {
-		return err
-	}
+var checkWorkloadVolumes = func(ctx context.Context, session *configuration.Session, input *configuration.Input, fresh bool) (bool, error) {
+	stack := workload.VolumeStack(input.Release(), input.Profile().AuthIssuer)
 	address, err := session.EngineAddress()
 	if err != nil {
-		return err
+		return false, err
 	}
 	engine, err := dockerengine.New(address)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer engine.Close()
-	exists, err := engine.AnyVolumesExist(ctx, stack)
-	if err != nil {
-		return err
-	}
-	if exists {
-		return configuration.ErrRootSecret
-	}
-	return nil
+	return engine.CheckEnrollmentVolumes(ctx, stack, fresh)
 }
 
 type apiManager struct {

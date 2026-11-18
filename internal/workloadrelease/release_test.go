@@ -11,7 +11,7 @@ import (
 )
 
 func TestAcceptedManifestVectors(t *testing.T) {
-	data, err := os.ReadFile("../../.agents/plans/SELF-21/workload-release-v3.vectors.json")
+	data, err := os.ReadFile("../../.agents/plans/SELF-24/workload-release-v4.vectors.json")
 	if err != nil {
 		t.Fatal(err)
 	}

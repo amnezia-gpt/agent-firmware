@@ -12,7 +12,7 @@ import (
 
 func TestUpdateCommandUsage(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	if code := run([]string{"update", "--issuer", "https://auth.example"}, strings.NewReader(""), &stdout, &stderr); code != 2 || stderr.String() != "{\"error_code\":\"invalid_usage\"}\n" {
+	if code := run([]string{"update", "--issuer", "https://auth.example"}, strings.NewReader(""), &stdout, &stderr); code != 2 || stderr.String() != "agent-firmware: run 'agent-firmware help update' for usage\n{\"error_code\":\"invalid_usage\"}\n" {
 		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
 	}
 	if os.Geteuid() != 0 {

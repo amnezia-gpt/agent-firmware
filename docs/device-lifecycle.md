@@ -136,27 +136,39 @@ none -> manufactured -> enrolled -> decommissioned
 ### 6. Leaving a domain
 
 - **Actor:** the owner or the server.
-- **Actions:** revoke the LDevID; remove the operational key and the owner's
-  data of this domain.
-- **Result:** state `manufactured`. Enrolling in another domain gives the same
-  device another LDevID.
+- **Command:** `sudo agent-firmware unenroll --confirm`. Add `--delete-data`
+  to erase user data of the current domain.
+- **Actions:** attempt deregistration, then remove operational keys, workload
+  resources and enrollment volumes. Retained user data belongs to its original
+  domain.
+- **Result:** state `manufactured`. Enrolling in the same domain attaches kept
+  data. Enrolling in another domain gives the device another LDevID and uses
+  that domain's volumes.
 
 ### 7. Decommissioning
 
 - **Actor:** the owner.
-- **Actions:** revoke every LDevID; destroy the root secret and the IDevID;
-  remove the firmware.
-- **Result:** state `decommissioned`. Manufacturing the same host again creates
-  a new device.
+- **Command:** `sudo agent-firmware decommission --confirm`. The verified
+  release bootstrap accepts `--decommission --confirm` for earlier
+  installations and for retries after the installed binary was removed.
+- **Actions:** attempt deregistration of the current enrollment, then remove
+  operational keys, enrollment volumes, root secret, IDevID and firmware.
+  Remove unused workload images by digest when the release is readable.
+  The earlier layout supports local removal and reports `not_attempted`.
+- **Result:** state `decommissioned`. User data stays by default and can be
+  attached after reinstalling and enrolling in its domain. Add `--delete-data`
+  to erase firmware volumes of every domain, even after firmware removal.
+  Domain deregistration is reported separately from local completion. Repeat
+  the confirmed command with the same flags to resume interrupted cleanup.
 
-## What belongs to which level
+## What belongs to each lifecycle
 
-| Device level (stage 1 to stage 7) | Enrollment level (stage 3 to stage 6) |
-| --- | --- |
-| image and firmware service | trust anchor of the domain |
-| root secret | operational key and LDevID |
-| IDevID key | owner's data |
-| fetched workloads | running workloads and their settings |
+| Device | Enrollment | User data |
+| --- | --- | --- |
+| Firmware service and installed binaries | Domain trust, operational keys and LDevID | Named volumes marked `user-data` in the manifest |
+| Root secret and IDevID | Workloads, network and volumes marked `enrollment` | Bound to the issuer and volume name |
+| Created by `install` | Created by `enroll` | Created when the workload stack first runs |
+| Removed by `decommission` | Removed by `unenroll` or `decommission` | Removed by an explicit `--delete-data` request |
 
 ## Rules that hold in every stage
 
@@ -170,7 +182,9 @@ none -> manufactured -> enrolled -> decommissioned
    the stages before it.
 7. An enrollment code is used once, arrives only as the input of stage 3 and is
    not kept after it.
-8. An update touches neither the identities nor the owner's data.
+8. An update preserves identity and user data. It refuses a release that drops,
+   renames or reclasses held user data. Workloads own the data format and must
+   keep it readable across firmware reinstall and workload rollback.
 9. There is no hardware root of trust: a full copy of the disk is a clone of
    the device. Detecting a clone is the server's task, not the device's.
 
@@ -192,13 +206,13 @@ none -> manufactured -> enrolled -> decommissioned
   (checking the host, fetching the image and the workloads) is finished before
   the owner's short-lived code is spent. A wrong or expired code costs a retry
   of stage 3, not a new installation.
-- **Workloads start at enrollment.** Their settings and the owner's data belong
-  to one domain, so they do not exist before the device joins one.
+- **Workloads start at enrollment.** Each enrollment has its own settings.
+  User data belongs to the domain and can outlive an enrollment or device.
 - **The root secret is software.** It does not stop someone who copies the
   whole disk. It does give three things: keys stay out of the workloads, so a
   compromised workload can use a key but cannot take it; data copied without
-  the root secret is unreadable; destroying the root secret is the
-  decommissioning.
+  the root secret is unreadable for sealed state; destroying the root secret
+  makes the old device identity unusable.
 
 ## Not defined yet
 

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/amnezia-gpt/agent-firmware/internal/workload"
+	"github.com/amnezia-gpt/agent-firmware/internal/workloadrelease"
 	"github.com/containerd/errdefs"
 	"github.com/moby/moby/client"
 )
@@ -25,20 +26,30 @@ func (e *Engine) Deregister(parent context.Context, stack workload.Stack) (strin
 	return string(outcome), err
 }
 
-func (e *Engine) RemoveEnrollment(ctx context.Context, installation string) error {
+func (e *Engine) RemoveEnrollment(ctx context.Context, installation string, deleteData bool) error {
 	if !enrollmentID.MatchString(installation) {
 		return workload.ErrConflict
 	}
 	prefix := "af-" + installation + "-"
 	filters := make(client.Filters).Add("label", workload.LabelPrefix+"managed-by="+workload.Manager).
 		Add("label", workload.LabelPrefix+"installation="+installation)
+	if err := e.CheckRemoval(ctx, installation); err != nil {
+		return err
+	}
 	if err := e.removeContainers(ctx, installation, prefix, filters); err != nil {
 		return err
 	}
 	if err := e.removeNetwork(ctx, installation, prefix+"net"); err != nil {
 		return err
 	}
-	return e.removeVolumes(ctx, installation, prefix, filters)
+	if err := e.RemoveOwnedVolumes(ctx, installation, deleteData); err != nil {
+		return err
+	}
+	remaining, err := e.removalInventory(ctx, installation, !deleteData)
+	if err == nil && remaining {
+		return workload.ErrCleanup
+	}
+	return err
 }
 
 func (e *Engine) removeContainers(ctx context.Context, installation, prefix string, filters client.Filters) error {
@@ -117,32 +128,37 @@ func (e *Engine) removeNetwork(ctx context.Context, installation, name string) e
 	return classify(err)
 }
 
-func (e *Engine) removeVolumes(ctx context.Context, installation, prefix string, filters client.Filters) error {
-	call, cancel := context.WithTimeout(ctx, e.callTimeout)
-	list, err := e.api.VolumeList(call, client.VolumeListOptions{Filters: filters})
-	cancel()
+// RemoveOwnedVolumes is the only path that deletes volumes. An empty
+// installation scopes an explicitly requested purge to all owned volumes.
+func (e *Engine) RemoveOwnedVolumes(ctx context.Context, installation string, deleteData bool) error {
+	if installation == "" && !deleteData || installation != "" && !enrollmentID.MatchString(installation) {
+		return workload.ErrConflict
+	}
+	volumes, err := e.managedVolumeInfo(ctx, installation)
 	if err != nil {
-		return classify(err)
+		return err
 	}
-	if len(list.Warnings) > 0 {
-		return workload.ErrEngine
-	}
-	for _, item := range list.Items {
-		if !owned(item.Labels, installation, "volume") {
+	for _, v := range volumes {
+		if !deleteData && v.Retention != workloadrelease.Enrollment {
 			continue
 		}
-		suffix, ok := strings.CutPrefix(item.Name, prefix)
-		if !ok || !resourceName.MatchString(suffix) {
-			return workload.ErrConflict
-		}
-		if err := e.removeVolume(ctx, installation, item.Name); err != nil {
+		if err := e.removeVolume(ctx, v.Name, installation, deleteData); err != nil {
 			return err
+		}
+	}
+	if installation == "" {
+		remaining, err := e.managedVolumeInfo(ctx, "")
+		if err != nil {
+			return err
+		}
+		if len(remaining) != 0 {
+			return workload.ErrCleanup
 		}
 	}
 	return nil
 }
 
-func (e *Engine) removeVolume(ctx context.Context, installation, name string) error {
+func (e *Engine) removeVolume(ctx context.Context, name, installation string, deleteData bool) error {
 	call, cancel := context.WithTimeout(ctx, e.callTimeout)
 	defer cancel()
 	result, err := e.api.VolumeInspect(call, name, client.VolumeInspectOptions{})
@@ -153,11 +169,13 @@ func (e *Engine) removeVolume(ctx context.Context, installation, name string) er
 		return classify(err)
 	}
 	v := result.Volume
-	if !owned(v.Labels, installation, "volume") {
-		return nil
-	}
-	if v.Name != name || v.Driver != "local" || len(v.Options) != 0 {
+	info, err := volumeInfo(v)
+	if err != nil || v.Name != name || installation != "" && v.Labels[installationLabel] != installation {
 		return workload.ErrConflict
+	}
+	// Apply the policy again to the object observed immediately before deletion.
+	if !deleteData && info.Retention != workloadrelease.Enrollment {
+		return nil
 	}
 	_, err = e.api.VolumeRemove(call, name, client.VolumeRemoveOptions{})
 	if errdefs.IsNotFound(err) {

@@ -163,6 +163,11 @@ func resources(raw []byte) ([]Resource, bool) {
 	return result, true
 }
 
+func ValidIssuer(raw string) bool {
+	normalized, ok := httpsURL(raw)
+	return ok && normalized == raw
+}
+
 func httpsURL(raw string) (string, bool) {
 	u, err := url.Parse(raw)
 	if err != nil || raw == "" || u.Scheme != "https" || u.Hostname() == "" || u.Opaque != "" ||

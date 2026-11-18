@@ -5,6 +5,7 @@
 # done by the verified firmware binary: device state, the service and rollback.
 #
 #   sh agent-firmware-install.sh
+#   sh agent-firmware-install.sh --decommission --confirm [--delete-data]
 #
 # The release pipeline replaces the three placeholders below. An unstamped
 # copy refuses to run. The whole body is one function called on the last
@@ -16,6 +17,23 @@ firmware_sha256='@@FIRMWARE_SHA256@@'
 workload_sha256='@@WORKLOAD_RELEASE_SHA256@@'
 
 main() {
+ if [ "$#" = 1 ] && { [ "$1" = --help ] || [ "$1" = -h ]; }; then
+  /bin/cat <<'HELP'
+agent-firmware-install.sh [--decommission --confirm [--delete-data]]
+
+Without arguments: verify and install the current firmware release, or
+update an installed one. The firmware then does everything else:
+  agent-firmware help
+
+--decommission --confirm
+    Remove the device and the firmware from this host, including an earlier
+    installation that the current firmware cannot update. User data is kept.
+--decommission --confirm --delete-data
+    Also remove the user data of every domain on this host. This cannot be
+    undone.
+HELP
+  return
+ fi
  PATH=/usr/sbin:/usr/bin:/sbin:/bin
  export PATH
  unset CDPATH
@@ -32,6 +50,9 @@ main() {
   status=$?
   trap - EXIT HUP INT TERM
   if [ "$status" != 0 ] && [ "$reported" != true ]; then
+   if [ "$error_code" = invalid_usage ]; then
+    printf '%s\n' 'agent-firmware-install: run with --help for usage' >&2
+   fi
    printf '{"error_code":"%s"}\n' "$error_code" >&2
   fi
   if [ -n "$workdir" ]; then rm -rf -- "$workdir"; fi
@@ -41,7 +62,14 @@ main() {
  trap cleanup EXIT
  trap 'error_code=bootstrap_interrupted; exit 1' HUP INT TERM
 
- [ "$#" = 0 ] || die invalid_usage
+ decommission=false
+ case "$#" in
+  0) : ;;
+  2|3) [ "$1" = --decommission ] && [ "$2" = --confirm ] || die invalid_usage
+       if [ "$#" = 3 ]; then [ "$3" = --delete-data ] || die invalid_usage; fi
+       decommission=true ;;
+  *) die invalid_usage ;;
+ esac
 
  is_digest() {
   [ "${#1}" = 64 ] || return 1
@@ -78,9 +106,16 @@ main() {
  }
  say "Downloading firmware $release_tag"
  fetch agent-firmware-linux-amd64 "$firmware_sha256" 67108864
- fetch workload-release.json "$workload_sha256" 65536
  firmware=$workdir/agent-firmware-linux-amd64
  chmod 700 "$firmware" || die bootstrap_write_failed
+ if [ "$decommission" = true ]; then
+  reported=true
+  shift
+  "$firmware" decommission "$@" </dev/null
+  return
+ fi
+
+ fetch workload-release.json "$workload_sha256" 65536
 
  # The firmware checks the release before Docker is changed and
  # reports its own error code; do not print a second one.

@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "kind": "workload-release",
   "release": "v0.1.0",
   "source_revision": "0123456789abcdef0123456789abcdef01234567",
@@ -8,12 +8,20 @@
     "linux/amd64",
     "linux/arm64"
   ],
-  "volumes": [
-    "front-state",
-    "worker-home",
-    "worker-auth",
-    "storage-home"
-  ],
+  "volumes": {
+    "front-state": {
+      "retention": "enrollment"
+    },
+    "worker-home": {
+      "retention": "user-data"
+    },
+    "worker-auth": {
+      "retention": "enrollment"
+    },
+    "storage-home": {
+      "retention": "user-data"
+    }
+  },
   "services": {
     "gateway": {
       "image": {

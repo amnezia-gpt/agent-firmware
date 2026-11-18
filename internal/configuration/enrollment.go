@@ -26,20 +26,22 @@ const (
 )
 
 type Enrollment struct {
-	Profile       backendprofile.Profile
-	Outcome       Outcome
-	RetryWithCode bool
-	raw           []byte
-	keys          *deviceidentity.Operational
-	sealedKeys    string
+	Profile          backendprofile.Profile
+	Outcome          Outcome
+	RetryWithCode    bool
+	AttachedUserData bool
+	raw              []byte
+	keys             *deviceidentity.Operational
+	sealedKeys       string
 }
 
 type enrollmentRecord struct {
-	Version       int     `json:"schema_version"`
-	Profile       []byte  `json:"backend_profile"`
-	Outcome       Outcome `json:"outcome"`
-	RetryWithCode bool    `json:"retry_with_code"`
-	Keys          string  `json:"operational_keys"`
+	Version          int     `json:"schema_version"`
+	Profile          []byte  `json:"backend_profile"`
+	Outcome          Outcome `json:"outcome"`
+	RetryWithCode    bool    `json:"retry_with_code"`
+	Keys             string  `json:"operational_keys"`
+	AttachedUserData bool    `json:"attached_user_data"`
 }
 
 func (e *Enrollment) Input(d *Device) *Input { return d.withProfile(e.Profile, e.raw) }
@@ -78,7 +80,7 @@ func loadEnrollment(root *os.Root, device *Device) (*Enrollment, error) {
 	if err != nil {
 		return nil, err
 	}
-	fields, ok := strictjson.Object(data, "schema_version", "backend_profile", "outcome", "retry_with_code", "operational_keys")
+	fields, ok := strictjson.Object(data, "schema_version", "backend_profile", "outcome", "retry_with_code", "operational_keys", "attached_user_data")
 	if !ok {
 		if old, valid := strictjson.Members(data); valid && old["operational_keys"] == nil {
 			return nil, ErrRootSecret
@@ -86,7 +88,8 @@ func loadEnrollment(root *os.Root, device *Device) (*Enrollment, error) {
 		return nil, ErrCorrupt
 	}
 	retry := string(bytes.TrimSpace(fields["retry_with_code"]))
-	if string(bytes.TrimSpace(fields["schema_version"])) != "2" || retry != "true" && retry != "false" {
+	attached := string(bytes.TrimSpace(fields["attached_user_data"]))
+	if string(bytes.TrimSpace(fields["schema_version"])) != "2" || retry != "true" && retry != "false" || attached != "true" && attached != "false" {
 		return nil, ErrCorrupt
 	}
 	var record enrollmentRecord
@@ -109,7 +112,7 @@ func loadEnrollment(root *os.Root, device *Device) (*Enrollment, error) {
 		return nil, ErrRootSecret
 	}
 	return &Enrollment{Profile: profile, Outcome: record.Outcome, RetryWithCode: record.RetryWithCode,
-		raw: record.Profile, keys: keys, sealedKeys: record.Keys}, nil
+		raw: record.Profile, keys: keys, sealedKeys: record.Keys, AttachedUserData: record.AttachedUserData}, nil
 }
 
 func (s *Session) writeEnrollment(dirName string, record enrollmentRecord) error {
@@ -146,7 +149,7 @@ func (s *Session) createEnrollment(record enrollmentRecord) error {
 	return s.store.synchronize(s.root)
 }
 
-func (s *Session) BeginEnrollment(input *Input) error {
+func (s *Session) BeginEnrollment(input *Input, attachedUserData bool) error {
 	if removal, err := loadRemoval(s.root); err != nil {
 		return err
 	} else if removal != nil {
@@ -178,7 +181,7 @@ func (s *Session) BeginEnrollment(input *Input) error {
 	if err != nil {
 		return ErrRootSecret
 	}
-	return s.createEnrollment(enrollmentRecord{2, input.profileBytes, Pending, false, keys})
+	return s.createEnrollment(enrollmentRecord{2, input.profileBytes, Pending, false, keys, attachedUserData})
 }
 
 func (s *Session) SetOutcome(issuer string, outcome Outcome, retryWithCode bool) error {
@@ -196,7 +199,7 @@ func (s *Session) SetOutcome(issuer string, outcome Outcome, retryWithCode bool)
 	if existing.Outcome == Enrolled || existing.Outcome == outcome && existing.RetryWithCode == retryWithCode {
 		return nil
 	}
-	return s.writeEnrollment(host.EnrollmentDir, enrollmentRecord{2, existing.raw, outcome, retryWithCode, existing.sealedKeys})
+	return s.writeEnrollment(host.EnrollmentDir, enrollmentRecord{2, existing.raw, outcome, retryWithCode, existing.sealedKeys, existing.AttachedUserData})
 }
 
 // RefreshEnrollment updates only the discovered resources. The identity and
@@ -211,5 +214,5 @@ func (s *Session) RefreshEnrollment(existing *Enrollment, raw []byte) error {
 		profile.IngressTrustBundle != previous.IngressTrustBundle || profile.IngressTrustSHA256 != previous.IngressTrustSHA256 {
 		return ErrIdentityConflict
 	}
-	return s.writeEnrollment(host.EnrollmentDir, enrollmentRecord{2, raw, existing.Outcome, existing.RetryWithCode, existing.sealedKeys})
+	return s.writeEnrollment(host.EnrollmentDir, enrollmentRecord{2, raw, existing.Outcome, existing.RetryWithCode, existing.sealedKeys, existing.AttachedUserData})
 }

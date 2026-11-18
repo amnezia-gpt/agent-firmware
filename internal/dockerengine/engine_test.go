@@ -186,7 +186,7 @@ func TestVolumeCreateResponseMustStillProveOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer e.Close()
-	if err := e.volumes(context.Background(), workload.Stack{Installation: "test", Volumes: []string{"test-volume"}}, true); !errors.Is(err, workload.ErrConflict) {
+	if err := e.volumes(context.Background(), workload.Stack{Installation: "test", Volumes: map[string]workloadrelease.Retention{"test-volume": workloadrelease.Enrollment}}, true); !errors.Is(err, workload.ErrConflict) {
 		t.Fatalf("foreign create result accepted: %v", err)
 	}
 }
@@ -266,7 +266,11 @@ func TestManufacturePullsImagesForEnrollmentAndRetry(t *testing.T) {
 		case !manufacturing && r.Method == "GET" && strings.Contains(r.URL.Path, "/networks/"):
 			json.NewEncoder(w).Encode(map[string]any{"Name": stack.Network, "Driver": "bridge", "Labels": labels(stack.Installation, "network")})
 		case !manufacturing && r.Method == "GET" && strings.Contains(r.URL.Path, "/volumes/"):
-			json.NewEncoder(w).Encode(map[string]any{"Driver": "local", "Labels": labels(stack.Installation, "volume")})
+			name := r.URL.Path[strings.LastIndexByte(r.URL.Path, '/')+1:]
+			tags := labels(stack.Installation, "volume")
+			tags[volumeRetentionLabel] = string(stack.Volumes[name])
+			tags[volumeIssuerLabel] = stack.Issuer
+			json.NewEncoder(w).Encode(map[string]any{"Name": name, "Driver": "local", "Labels": tags})
 		default:
 			t.Error("unexpected engine request:", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusBadRequest)

@@ -20,6 +20,7 @@ import (
 	"github.com/amnezia-gpt/agent-firmware/internal/configuration"
 	hostplatform "github.com/amnezia-gpt/agent-firmware/internal/host"
 	"github.com/amnezia-gpt/agent-firmware/internal/privatefile"
+	"github.com/amnezia-gpt/agent-firmware/internal/workload"
 )
 
 // Error is a bounded diagnostic; it never contains input, paths or underlying errors.
@@ -152,8 +153,13 @@ func Install(ctx context.Context, request Request) (err error) {
 		return err
 	}
 	r.say("Checking the host and preparing workload images")
-	if r.Firmware.Preflight(ctx) != nil {
-		return ErrDocker
+	if err := r.Firmware.Preflight(ctx); err != nil {
+		switch err {
+		case workload.ErrVolumeUnclassified, workload.ErrVolumeClass, workload.ErrUserVolumeMissing, workload.ErrConflict:
+			return err
+		default:
+			return stateError(err, ErrDocker)
+		}
 	}
 	if ctx.Err() != nil {
 		return ErrInterrupted

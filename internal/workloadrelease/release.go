@@ -33,14 +33,14 @@ const (
 )
 
 type Release struct {
-	Kind           string             `json:"kind"`
-	Version        string             `json:"release"`
-	SourceRevision string             `json:"source_revision"`
-	DeviceAPI      string             `json:"device_api"`
-	Platforms      []string           `json:"platforms"`
-	Volumes        []string           `json:"volumes"`
-	Services       map[string]Service `json:"services"`
-	Client         APIClient          `json:"device_api_client"`
+	Kind           string                       `json:"kind"`
+	Version        string                       `json:"release"`
+	SourceRevision string                       `json:"source_revision"`
+	DeviceAPI      string                       `json:"device_api"`
+	Platforms      []string                     `json:"platforms"`
+	Volumes        map[string]VolumeDeclaration `json:"volumes"`
+	Services       map[string]Service           `json:"services"`
+	Client         APIClient                    `json:"device_api_client"`
 }
 
 type Service struct {
@@ -62,10 +62,26 @@ type Image struct {
 
 func (i Image) Reference() string { return i.Repository + "@" + i.Digest }
 
+func IsPinnedReference(reference string) bool {
+	repository, digest, ok := strings.Cut(reference, "@")
+	return ok && repositoryPattern.MatchString(repository) && digestPattern.MatchString(digest)
+}
+
 type Volume struct {
 	Source   string `json:"source"`
 	Target   string `json:"target"`
 	ReadOnly bool   `json:"read_only,omitempty"`
+}
+
+type Retention string
+
+const (
+	Enrollment Retention = "enrollment"
+	UserData   Retention = "user-data"
+)
+
+type VolumeDeclaration struct {
+	Retention Retention `json:"retention"`
 }
 
 type Value struct {
@@ -106,16 +122,31 @@ func Parse(reader io.Reader) (Release, error) {
 		"schema_version", "kind", "release", "source_revision", "device_api", "platforms", "volumes", "services", "device_api_client",
 	})
 	var release Release
-	if !ok || string(bytes.TrimSpace(fields["schema_version"])) != "3" || json.Unmarshal(data, &release) != nil ||
+	if !ok || string(bytes.TrimSpace(fields["schema_version"])) != "4" || json.Unmarshal(data, &release) != nil ||
 		release.Kind != "workload-release" || release.DeviceAPI != DeviceAPIV3 ||
 		!versionPattern.MatchString(release.Version) || !revisionPattern.MatchString(release.SourceRevision) ||
 		len(release.Platforms) < 1 || !unique(release.Platforms, 4, validPlatform) ||
-		!unique(release.Volumes, 16, namePattern.MatchString) ||
+		!validVolumes(fields["volumes"], release.Volumes) ||
 		!validServices(fields["services"], release.Services) || !validClient(fields["device_api_client"], release.Client) ||
 		!release.validReferences() {
 		return Release{}, ErrInvalid
 	}
 	return release, nil
+}
+
+func validVolumes(raw []byte, volumes map[string]VolumeDeclaration) bool {
+	fields, ok := strictjson.Members(raw)
+	if !ok || len(fields) > 16 {
+		return false
+	}
+	for name, declaration := range fields {
+		_, ok := object(declaration, []string{"retention"})
+		class := volumes[name].Retention
+		if !ok || !namePattern.MatchString(name) || class != Enrollment && class != UserData {
+			return false
+		}
+	}
+	return true
 }
 
 // object rejects case aliases, duplicates, unknown members and null fields.

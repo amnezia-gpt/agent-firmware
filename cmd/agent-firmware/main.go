@@ -22,69 +22,48 @@ func main() {
 	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
 
-func run(args []string, input io.Reader, stdout, stderr io.Writer) int {
-	if len(args) == 1 && args[0] == "preflight" {
-		if os.Geteuid() != 0 {
-			return report(stderr, "root_required", 1)
-		}
-		address, err := (configuration.Store{Path: defaultStateDir}).EngineAddress()
-		if err != nil {
-			return report(stderr, err.Error(), 1)
-		}
-		engine, err := dockerengine.New(address)
-		if err != nil {
-			return report(stderr, err.Error(), 1)
-		}
-		defer engine.Close()
-		if err := engine.Prerequisites(context.Background()); err != nil {
-			return report(stderr, err.Error(), 1)
-		}
-		return respond(stdout, stderr, struct {
-			Ready bool `json:"ready"`
-		}{true})
+func runPreflight(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 0 {
+		return report(stderr, "invalid_usage", 2)
 	}
-	if len(args) > 0 && args[0] == "validate-release" {
-		return validateRelease(args[1:], stdout, stderr)
+	if os.Geteuid() != 0 {
+		return report(stderr, "root_required", 1)
 	}
-	if len(args) > 0 && args[0] == "update" {
-		return runUpdate(args[1:], stdout, stderr)
+	address, err := (configuration.Store{Path: defaultStateDir}).EngineAddress()
+	if err != nil {
+		return report(stderr, err.Error(), 1)
 	}
-	if len(args) > 0 && args[0] == "install" {
-		return runInstall(args[1:], stdout, stderr)
+	engine, err := dockerengine.New(address)
+	if err != nil {
+		return report(stderr, err.Error(), 1)
 	}
-	if len(args) > 0 && args[0] == "enroll" {
-		return runEnroll(args[1:], input, stdout, stderr)
+	defer engine.Close()
+	if err := engine.Prerequisites(context.Background()); err != nil {
+		return report(stderr, err.Error(), 1)
 	}
-	if len(args) > 0 && args[0] == "unenroll" {
-		return runUnenroll(args[1:], stdout, stderr)
+	return respond(stdout, stderr, struct {
+		Ready bool `json:"ready"`
+	}{true})
+}
+
+func runDiscoverProfile(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 2 || args[0] != "--issuer" {
+		return report(stderr, "invalid_usage", 2)
 	}
-	if len(args) > 0 && args[0] == "discover-profile" {
-		// The profile is assembled from the issuer's standard metadata; nothing on the host changes.
-		if len(args) != 3 || args[1] != "--issuer" {
-			return report(stderr, "invalid_usage", 2)
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		defer cancel()
-		profile, err := discover(ctx, args[2])
-		if err != nil {
-			return report(stderr, err.Error(), 1)
-		}
-		if n, err := stdout.Write(profile); err != nil || n != len(profile) {
-			return report(stderr, "output_failed", 1)
-		}
-		return 0
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	profile, err := discover(ctx, args[1])
+	if err != nil {
+		return report(stderr, err.Error(), 1)
 	}
-	if len(args) > 0 && args[0] != "validate-profile" {
-		switch args[0] {
-		case "validate":
-			return validateConfiguration(args[1:], stdout, stderr)
-		case "status", "apply", "serve":
-			return runStateCommand(args, stdout, stderr)
-		default:
-			return report(stderr, "invalid_usage", 2)
-		}
+	if n, err := stdout.Write(profile); err != nil || n != len(profile) {
+		return report(stderr, "output_failed", 1)
 	}
-	if len(args) != 1 {
+	return 0
+}
+
+func runValidateProfile(args []string, input io.Reader, stdout, stderr io.Writer) int {
+	if len(args) != 0 {
 		return report(stderr, "invalid_usage", 2)
 	}
 	if _, err := backendprofile.Parse(input); err != nil {
@@ -204,6 +183,15 @@ func respond(stdout, stderr io.Writer, value any) int {
 }
 
 func report(stderr io.Writer, code string, exit int) int {
+	if writer, ok := stderr.(commandDiagnostics); ok && exit == 2 {
+		_, _ = io.WriteString(stderr, writer.hint())
+	}
+	switch code {
+	case string(configuration.ErrLegacy):
+		_, _ = io.WriteString(stderr, "agent-firmware: Earlier installation found. To remove the firmware and retain its volumes, run the release bootstrap with --decommission --confirm. Add --delete-data to erase the volumes before reinstalling.\n")
+	case string(configuration.ErrRetainedVolumes):
+		_, _ = io.WriteString(stderr, "agent-firmware: Enrollment or unclassified volumes remain. Run decommission --confirm --delete-data through the release bootstrap to erase firmware volumes before installing.\n")
+	}
 	message := "{\"error_code\":\"" + code + "\"}\n"
 	if n, err := io.WriteString(stderr, message); err != nil || n != len(message) {
 		return 1

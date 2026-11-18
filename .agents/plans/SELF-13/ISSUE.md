@@ -31,7 +31,8 @@ pointed at before; every other version directory is removed.
 
 ## Not In Scope
 
-- An `uninstall` command. Its absence is a deliberate owner decision for now (2026-11-17).
+- Device removal. The owner deferred it on 2026-11-17 and added it as
+  `decommission` on 2026-11-18 in [SELF-23](../SELF-23/ISSUE.md).
 - Moving the transaction directory or changing the installation layout.
 
 ## Acceptance Criteria

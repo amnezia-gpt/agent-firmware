@@ -70,7 +70,11 @@ func TestInstallCommand(t *testing.T) {
 				t.Fatalf("exit=%d stderr=%q", code, &errors)
 			}
 			if tc.errorCode != "" {
-				if errors.String() != "{\"error_code\":\""+tc.errorCode+"\"}\n" || placed != 0 || output.Len() != 0 {
+				want := "{\"error_code\":\"" + tc.errorCode + "\"}\n"
+				if tc.code == 2 {
+					want = "agent-firmware: run 'agent-firmware help install' for usage\n" + want
+				}
+				if errors.String() != want || placed != 0 || output.Len() != 0 {
 					t.Fatalf("stdout=%q stderr=%q placed=%d", &output, &errors, placed)
 				}
 			} else if output.String() != "{\"installed\":true}\n" || errors.String() != "agent-firmware: step\n" || placed != 1 {
@@ -101,7 +105,7 @@ func TestServiceRefreshesMissingScopesOncePerRelease(t *testing.T) {
 	if _, err := store.Manufacture(device, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Exclusive(func(s *configuration.Session) error { return s.BeginEnrollment(input) }); err != nil {
+	if err := store.Exclusive(func(s *configuration.Session) error { return s.BeginEnrollment(input, false) }); err != nil {
 		t.Fatal(err)
 	}
 	snapshot, err := store.Snapshot()
@@ -160,7 +164,8 @@ func TestReleaseGateRejectsUnavailableTransportBeforeDiscovery(t *testing.T) {
 	}
 	var out, stderr bytes.Buffer
 	if code := run([]string{"install", "--release", manifestFixture}, unreadableStdin{t}, &out, &stderr); code != 1 ||
-		stderr.String() != "{\"error_code\":\"legacy_state_layout\"}\n" {
+		!strings.Contains(stderr.String(), "--decommission --confirm") ||
+		!strings.HasSuffix(stderr.String(), "{\"error_code\":\"legacy_state_layout\"}\n") {
 		t.Fatalf("legacy install: %d %q", code, &stderr)
 	}
 }

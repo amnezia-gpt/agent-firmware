@@ -10,6 +10,9 @@
 - Dependencies: [SELF-17](../SELF-17/ISSUE.md), [SELF-19](../SELF-19/ISSUE.md)
 - Authorization: owner authorized execution of SELF-18, SELF-19 and SELF-20 as one group on 2026-11-17.
 
+The original cleanup contract below is superseded for volumes by
+[SELF-26](../SELF-26/ISSUE.md). The default keeps user data.
+
 ## Problem
 
 The firmware has no way to return an enrolled device to the manufactured state. The enrollment's containers,

@@ -51,7 +51,12 @@ func operationLock(root *os.Root) (*os.File, error) {
 	return lock, nil
 }
 
-func (s *Session) Snapshot() (Snapshot, error) { return loadSnapshot(s.root) }
+func (s *Session) Snapshot() (Snapshot, error) {
+	if err := checkDecommission(s.root); err != nil {
+		return Snapshot{}, err
+	}
+	return loadSnapshot(s.root)
+}
 func (s *Session) Read() ([]byte, error) {
 	f, err := openFile(s.root, host.OperationJournal, os.O_RDONLY)
 	if errors.Is(err, ErrMissing) {

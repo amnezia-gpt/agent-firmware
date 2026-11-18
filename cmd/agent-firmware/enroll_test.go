@@ -44,11 +44,12 @@ func (s *testCodes) Delete() error {
 }
 
 func TestEnrollmentRefusalAndRetryPreserveDeviceAndPinIssuer(t *testing.T) {
+	stubStatusData(t)
 	enableTestRelease(t)
 	profile := fixture(t, profileFixture)
-	originalDiscover, originalCheck, originalCodes := discover, checkFreshWorkloadVolumes, openCodes
+	originalDiscover, originalCheck, originalCodes := discover, checkWorkloadVolumes, openCodes
 	t.Cleanup(func() {
-		discover, checkFreshWorkloadVolumes, openCodes = originalDiscover, originalCheck, originalCodes
+		discover, checkWorkloadVolumes, openCodes = originalDiscover, originalCheck, originalCodes
 	})
 	discoveries, checks := 0, 0
 	const issuer = "https://auth.example"
@@ -59,9 +60,9 @@ func TestEnrollmentRefusalAndRetryPreserveDeviceAndPinIssuer(t *testing.T) {
 		}
 		return profile, nil
 	}
-	checkFreshWorkloadVolumes = func(context.Context, *configuration.Session, *configuration.Input) error {
+	checkWorkloadVolumes = func(_ context.Context, _ *configuration.Session, _ *configuration.Input, fresh bool) (bool, error) {
 		checks++
-		return nil
+		return fresh, nil
 	}
 	codes := &testCodes{staged: make(chan string, 2)}
 	openCodes = func(host.Layout, string, bool) (codeStore, error) { return codes, nil }
@@ -104,7 +105,8 @@ func TestEnrollmentRefusalAndRetryPreserveDeviceAndPinIssuer(t *testing.T) {
 		finished := make(chan struct{})
 		go func() {
 			defer close(finished)
-			done <- enrollDevice(ctx, store, layout, issuer, code, time.Millisecond)
+			_, err := enrollDevice(ctx, store, layout, issuer, code, time.Millisecond)
+			done <- err
 		}()
 		t.Cleanup(func() { cancel(); <-finished })
 		select {
@@ -152,7 +154,7 @@ func TestEnrollmentRefusalAndRetryPreserveDeviceAndPinIssuer(t *testing.T) {
 	}
 	cancel()
 	show(enrollmentPending, false)
-	if err := enrollDevice(t.Context(), store, layout, "https://other.example", "", time.Millisecond); err != configuration.ErrIdentityConflict {
+	if _, err := enrollDevice(t.Context(), store, layout, "https://other.example", "", time.Millisecond); err != configuration.ErrIdentityConflict {
 		t.Fatalf("a second issuer was accepted: %v", err)
 	}
 	done, cancel = attempt(secondCode)
@@ -172,7 +174,10 @@ func TestEnrollmentRefusalAndRetryPreserveDeviceAndPinIssuer(t *testing.T) {
 		t.Fatal(err)
 	}
 	show(enrolled, true)
-	if discoveries != 1 || checks != 1 {
+	if got, err := enrollDevice(t.Context(), store, layout, issuer, "", time.Millisecond); err != nil || got != "attached" {
+		t.Fatalf("retry lost attachment result: %q, %v", got, err)
+	}
+	if discoveries != 1 || checks != 2 {
 		t.Fatalf("retry repeated initial enrollment checks: discovery=%d volume checks=%d", discoveries, checks)
 	}
 	if !bytes.Equal(manifestBefore, fixture(t, devicePath)) || !bytes.Equal(keyBefore, fixture(t, rootPath)) {

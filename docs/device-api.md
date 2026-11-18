@@ -1,15 +1,15 @@
 # Local device services
 
 The accepted [Device API v3 contract and public vectors](../.agents/plans/SELF-14/DESIGN.md#device-api-v3)
-define the JSON fields, byte encodings and failures. A schema 3 manifest names
+define the JSON fields, byte encodings and failures. A schema 4 manifest names
 the client service and its command to open the device link.
 
 ## Software root secret
 
 The first successful manufacture generates a 32-byte random secret in
 `/var/lib/agent-firmware/root-secret` with mode 0600 and firmware ownership.
-This happens inside the configuration writer lock after checking for retained
-workload volumes. The device record pins the SHA-256 fingerprint of the
+This happens inside the configuration writer lock after checking that any retained workload volumes
+carry the user-data class. The device record pins the SHA-256 fingerprint of the
 secret. An existing device record with a missing, unsafe, truncated or different
 secret fails with `keystore_unavailable`. The firmware never regenerates the
 secret over existing state. Earlier installations must be reinstalled.

@@ -133,36 +133,6 @@ func (e *Engine) network(ctx context.Context, s workload.Stack, create bool) err
 	}
 	return nil
 }
-func (e *Engine) volumes(ctx context.Context, s workload.Stack, create bool) error {
-	for _, name := range s.Volumes {
-		call, cancel := context.WithTimeout(ctx, e.callTimeout)
-		result, err := e.api.VolumeInspect(call, name, client.VolumeInspectOptions{})
-		if errdefs.IsNotFound(err) {
-			if create {
-				created, createErr := e.api.VolumeCreate(call, client.VolumeCreateOptions{Name: name, Driver: "local", Labels: labels(s.Installation, "volume")})
-				err = createErr
-				if err == nil && (!owned(created.Volume.Labels, s.Installation, "volume") || created.Volume.Name != name || created.Volume.Driver != "local" || len(created.Volume.Options) > 0) {
-					err = workload.ErrConflict
-				}
-			} else {
-				err = nil
-			}
-		} else if err == nil {
-			if !owned(result.Volume.Labels, s.Installation, "volume") || result.Volume.Driver != "local" || len(result.Volume.Options) > 0 {
-				err = workload.ErrConflict
-			}
-		}
-		cancel()
-		if err != nil {
-			var code workload.Error
-			if errors.As(err, &code) {
-				return code
-			}
-			return classify(err)
-		}
-	}
-	return nil
-}
 
 // Retired finds only containers with this enrollment's ownership labels.
 // Existing journals are recovered before listing, so backups are never adopted.
@@ -235,7 +205,7 @@ func (e *Engine) Preflight(ctx context.Context, s workload.Stack) error {
 		}
 		for _, m := range actual.Mounts {
 			if !knownMount(spec, m) {
-				if err := e.checkRetainedMount(ctx, s.Installation, m); err != nil {
+				if err := e.checkRetainedMount(ctx, s, m); err != nil {
 					return err
 				}
 			}
@@ -243,8 +213,8 @@ func (e *Engine) Preflight(ctx context.Context, s workload.Stack) error {
 	}
 	return nil
 }
-func (e *Engine) checkRetainedMount(ctx context.Context, installation string, m container.MountPoint) error {
-	if m.Type != mount.TypeVolume || !strings.HasPrefix(m.Name, "af-"+installation+"-") {
+func (e *Engine) checkRetainedMount(ctx context.Context, stack workload.Stack, m container.MountPoint) error {
+	if m.Type != mount.TypeVolume || !strings.HasPrefix(m.Name, "af-"+stack.Installation+"-") {
 		return workload.ErrConflict
 	}
 	call, cancel := context.WithTimeout(ctx, e.callTimeout)
@@ -257,7 +227,17 @@ func (e *Engine) checkRetainedMount(ctx context.Context, installation string, m 
 		return classify(err)
 	}
 	v := result.Volume
-	if v.Name != m.Name || !owned(v.Labels, installation, "volume") || v.Driver != "local" || len(v.Options) != 0 {
+	if v.Name != m.Name || !ownedVolume(v, stack.Installation) {
+		return workload.ErrConflict
+	}
+	info, err := volumeInfo(v)
+	if err != nil {
+		return err
+	}
+	if info.Retention == "" {
+		return workload.ErrVolumeUnclassified
+	}
+	if info.Issuer != stack.Issuer {
 		return workload.ErrConflict
 	}
 	return nil

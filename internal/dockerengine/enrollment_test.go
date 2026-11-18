@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -99,5 +100,41 @@ func TestEnrollmentStatusExecUsesOneBoundedUnprivilegedCommand(t *testing.T) {
 	got, err := status.run(t.Context(), engine, id, "65532:65532", command)
 	if err != nil || got != EnrollmentComplete || status.active != "" {
 		t.Fatalf("outcome=%q err=%v outstanding exec=%q", got, err, status.active)
+	}
+}
+
+func TestSchema4ControlResultVectors(t *testing.T) {
+	raw, err := os.ReadFile("../../.agents/plans/SELF-24/workload-release-v4.vectors.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vectors struct {
+		Control struct {
+			Accept []json.RawMessage
+			Refuse []json.RawMessage `json:"treat_as_unavailable"`
+		} `json:"control_results"`
+	}
+	if err := json.Unmarshal(raw, &vectors); err != nil {
+		t.Fatal(err)
+	}
+	if len(vectors.Control.Accept) == 0 || len(vectors.Control.Refuse) == 0 {
+		t.Fatal("missing control vectors")
+	}
+	for _, accept := range []bool{true, false} {
+		cases := vectors.Control.Refuse
+		if accept {
+			cases = vectors.Control.Accept
+		}
+		for _, value := range cases {
+			payload := string(value)
+			var malformed string
+			if json.Unmarshal(value, &malformed) == nil {
+				payload = malformed
+			}
+			_, err := readControlOutcome(bytes.NewReader(statusFrame(1, payload)), EnrollmentComplete, EnrollmentPending, EnrollmentFailed, "deregistered")
+			if (err == nil) != accept {
+				t.Fatalf("control result %s: %v", value, err)
+			}
+		}
 	}
 }

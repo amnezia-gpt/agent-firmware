@@ -131,6 +131,9 @@ func (s Store) Snapshot() (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	defer root.Close()
+	if err := checkDecommission(root); err != nil {
+		return Snapshot{}, err
+	}
 	return loadSnapshot(root)
 }
 
@@ -140,6 +143,9 @@ func (s Store) LoadDevice() (*Device, error) {
 		return nil, err
 	}
 	defer root.Close()
+	if err := checkDecommission(root); err != nil {
+		return nil, err
+	}
 	return loadDevice(root)
 }
 

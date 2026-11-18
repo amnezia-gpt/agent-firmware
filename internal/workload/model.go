@@ -23,15 +23,18 @@ type Error string
 func (e Error) Error() string { return string(e) }
 
 const (
-	ErrEngine   Error = "engine_failed"
-	ErrConflict Error = "resource_conflict"
-	ErrHealth   Error = "workload_health_failed"
-	ErrTimeout  Error = "engine_timeout"
-	ErrCanceled Error = "operation_cancelled"
-	ErrDeadline Error = "operation_deadline"
-	ErrJournal  Error = "operation_journal_failed"
-	ErrRecovery Error = "recovery_required"
-	ErrCleanup  Error = "backup_cleanup_pending"
+	ErrEngine             Error = "engine_failed"
+	ErrConflict           Error = "resource_conflict"
+	ErrHealth             Error = "workload_health_failed"
+	ErrTimeout            Error = "engine_timeout"
+	ErrCanceled           Error = "operation_cancelled"
+	ErrDeadline           Error = "operation_deadline"
+	ErrJournal            Error = "operation_journal_failed"
+	ErrRecovery           Error = "recovery_required"
+	ErrCleanup            Error = "backup_cleanup_pending"
+	ErrVolumeUnclassified Error = "volume_retention_missing"
+	ErrVolumeClass        Error = "volume_retention_conflict"
+	ErrUserVolumeMissing  Error = "held_user_data_not_declared"
 )
 
 type Mount struct {
@@ -55,7 +58,8 @@ func (s Spec) Hash() string {
 
 type Stack struct {
 	Installation, Generation, Network string
-	Volumes                           []string
+	Issuer                            string
+	Volumes                           map[string]workloadrelease.Retention
 	Specs                             []Spec
 	DeviceAPI                         string
 	Client                            workloadrelease.APIClient
@@ -65,6 +69,17 @@ type Stack struct {
 func EnrollmentID(issuer string) string {
 	sum := sha256.Sum256([]byte("urn:agent-firmware:enrollment:v1\n" + issuer))
 	return hex.EncodeToString(sum[:16])
+}
+
+func VolumeStack(release workloadrelease.Release, issuer string) Stack {
+	id := EnrollmentID(issuer)
+	prefix := "af-" + id + "-"
+	stack := Stack{Installation: id, Issuer: issuer, Network: prefix + "net",
+		Volumes: make(map[string]workloadrelease.Retention, len(release.Volumes))}
+	for name, declaration := range release.Volumes {
+		stack.Volumes[prefix+name] = declaration.Retention
+	}
+	return stack
 }
 
 func FromReaders(p, r io.Reader) (Stack, error) {
@@ -81,17 +96,10 @@ func FromInput(input *configuration.Input) (Stack, error) {
 	if err != nil {
 		return Stack{}, err
 	}
-	id := EnrollmentID(profile.AuthIssuer)
+	stack := VolumeStack(release, profile.AuthIssuer)
+	id := stack.Installation
 	prefix := "af-" + id + "-"
-	stack := Stack{
-		Installation: id, Generation: input.Generation(), Network: prefix + "net",
-		DeviceAPI: release.DeviceAPI, Client: release.Client,
-	}
-	volumes := slices.Clone(release.Volumes)
-	slices.Sort(volumes)
-	for _, volume := range volumes {
-		stack.Volumes = append(stack.Volumes, prefix+volume)
-	}
+	stack.Generation, stack.DeviceAPI, stack.Client = input.Generation(), release.DeviceAPI, release.Client
 	for _, name := range release.Order() {
 		service := release.Services[name]
 		spec := Spec{

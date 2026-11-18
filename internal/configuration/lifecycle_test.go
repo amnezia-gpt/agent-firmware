@@ -30,7 +30,7 @@ func TestManufactureAndEnrollmentKeepSeparateState(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := store.Exclusive(func(s *Session) error {
-		if err := s.BeginEnrollment(input); err != nil {
+		if err := s.BeginEnrollment(input, false); err != nil {
 			return err
 		}
 		return s.SetOutcome(input.Profile().AuthIssuer, Enrolled, false)
@@ -97,7 +97,7 @@ func TestInstalledIdentityAndOperationalKeysFailClosed(t *testing.T) {
 		t.Fatalf("manufactured identity unavailable: %v", err)
 	}
 	original := snapshot.Device.Thumbprint()
-	if err := store.Exclusive(func(s *Session) error { return s.BeginEnrollment(input) }); err != nil {
+	if err := store.Exclusive(func(s *Session) error { return s.BeginEnrollment(input, false) }); err != nil {
 		t.Fatal(err)
 	}
 	after, err := store.Snapshot()
@@ -109,7 +109,7 @@ func TestInstalledIdentityAndOperationalKeysFailClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := store.Exclusive(func(s *Session) error {
-		if err := s.BeginEnrollment(input); err != nil {
+		if err := s.BeginEnrollment(input, false); err != nil {
 			return err
 		}
 		return s.SetOutcome(input.Profile().AuthIssuer, Failed, false)
@@ -142,7 +142,7 @@ func TestInstalledIdentityAndOperationalKeysFailClosed(t *testing.T) {
 	if _, err := store.Snapshot(); !errors.Is(err, ErrRootSecret) {
 		t.Fatalf("missing keys were accepted: %v", err)
 	}
-	if err := store.Exclusive(func(s *Session) error { return s.BeginEnrollment(input) }); !errors.Is(err, ErrRootSecret) {
+	if err := store.Exclusive(func(s *Session) error { return s.BeginEnrollment(input, false) }); !errors.Is(err, ErrRootSecret) {
 		t.Fatalf("missing keys were silently replaced: %v", err)
 	}
 	if _, err := store.Manufacture(device, nil); !errors.Is(err, ErrRootSecret) {

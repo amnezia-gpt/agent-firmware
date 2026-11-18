@@ -3,10 +3,14 @@
 Go host supervisor for Amnezia devices. The first feature is tracked in
 [SELF-1](.agents/plans/SELF-1/ISSUE.md).
 
-The firmware builds a stack from a schema 3 workload manifest. It serves Device
+The firmware builds a stack from a schema 4 workload manifest. It serves Device
 API v3 over an HTTP/2 stream opened into the manifest's device API client
 container. The release check compares the pinned manifest with the exact
 published bytes and verifies the API and host platform before installation.
+
+Run `agent-firmware help` for the command list, or
+`agent-firmware help <command>` for flags and effects. The release bootstrap
+also accepts `--help`.
 
 With Go 1.27.4, run:
 
@@ -33,7 +37,7 @@ URL hosts; Qt/internationalized-host equivalence is not claimed.
 
 The manifest can declare up to eight services, sixteen named volumes and
 thirty-two environment entries per service. The manifest and test vectors are
-specified in [SELF-21](.agents/plans/SELF-21/DESIGN.md). To check whether a
+specified in [SELF-24](.agents/plans/SELF-24/DESIGN.md). To check whether a
 validated manifest can be installed by the current binary, run
 `agent-firmware validate-release --release workload-release.json`.
 It checks the target platform and required Device API.
@@ -49,7 +53,9 @@ state is reported as `legacy_state_layout`.
 `sudo agent-firmware status` uses local state only. It reports whether the device is
 not installed, manufactured and not enrolled, pending enrollment, or enrolled.
 It includes the firmware version and the manufactured device’s IDevID thumbprint.
-It shows the issuer only when enrolled.
+It shows the current enrollment issuer when enrolled and lists retained user
+data by domain, volume name and creation time. An unavailable local engine
+leaves device status visible and marks the data inventory as unknown.
 A directory sync failure reports `state_commit_uncertain`. Inspect status to
 learn which snapshot is visible.
 
@@ -149,11 +155,41 @@ To leave a domain and delete the enrollment's local data, run:
 sudo agent-firmware unenroll --confirm
 ```
 
-The firmware attempts deregistration, then removes the enrollment's owned
-containers, network, volumes, operational keys and local records. An unavailable
-domain is reported separately from local completion. Repeat the confirmed
-command to resume interrupted cleanup. The manufactured device keeps its
-IDevID and can enroll again without installing.
+The firmware attempts deregistration, then removes containers, the network,
+enrollment volumes and operational keys. The device keeps its IDevID.
+User data volumes stay and the command lists what it kept. Enrolling in the
+same domain attaches them and reports `user_data: "attached"`. Other domains
+use their own volumes. To erase the current domain's user data, add
+`--delete-data` to the confirmed command.
+
+To remove the firmware and its device identity while keeping user data:
+
+```sh
+sudo agent-firmware decommission --confirm
+```
+
+Add `--delete-data` to erase firmware volumes of every domain on the host. A
+subsequent install creates a new IDevID. Both removal commands report domain
+deregistration separately from local completion. Repeat an interrupted command
+with the same flags. Unclassified firmware volumes also stay by default.
+
+For an earlier installation that returns `legacy_state_layout`, or after the
+installed binary is gone, use the bootstrap from a release that supports
+decommissioning:
+
+```sh
+sudo sh agent-firmware-install.sh --decommission --confirm
+```
+
+Earlier installations report `deregistration: "not_attempted"`. Remove their
+device from the account separately. Their unclassified volumes cannot be
+attached to the current layout. If you intend to erase those volumes before
+reinstalling, add `--delete-data` to the bootstrap command. This also works
+after firmware has been removed.
+
+The firmware never drops, renames or reclasses retained user data as part of
+an update. Host administrators are responsible for any deletion performed
+through the container engine directly.
 
 Profile assembly is also available on its own and changes nothing on the host:
 

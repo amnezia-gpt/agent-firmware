@@ -93,41 +93,43 @@ func runEnroll(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	ctx, cancel := context.WithTimeout(parent, 20*time.Minute)
 	defer cancel()
 	store := configuration.Store{Path: defaultStateDir}
-	if err := enrollDevice(ctx, store, hostLayout, issuer, code, time.Second); err != nil {
+	userData, err := enrollDevice(ctx, store, hostLayout, issuer, code, time.Second)
+	if err != nil {
 		return report(stderr, err.Error(), 1)
 	}
 	return respond(stdout, stderr, struct {
-		State string `json:"state"`
-	}{"enrolled"})
+		State    string `json:"state"`
+		UserData string `json:"user_data"`
+	}{"enrolled", userData})
 }
 
-func enrollDevice(ctx context.Context, store configuration.Store, layout host.Layout, issuer, code string, interval time.Duration) (result error) {
+func enrollDevice(ctx context.Context, store configuration.Store, layout host.Layout, issuer, code string, interval time.Duration) (userData string, result error) {
 	unlock, err := installer.Lock(layout)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer unlock()
 	snapshot, err := store.Snapshot()
 	if err != nil {
-		return err
+		return "", err
 	}
 	if snapshot.Removal != nil {
-		return configuration.ErrRemovalPending
+		return "", configuration.ErrRemovalPending
 	}
 	if snap := snapshot.Enrollment; snap != nil {
 		if snap.Profile.AuthIssuer != issuer {
-			return configuration.ErrIdentityConflict
+			return "", configuration.ErrIdentityConflict
 		}
 		if snap.Outcome == configuration.Enrolled {
-			return nil
+			return enrollmentDataResult(snap.AttachedUserData), nil
 		}
 	}
 	if err := checkDeployableRelease(snapshot.Device.Release()); err != nil {
-		return err
+		return "", err
 	}
 	input, err := enrollmentInput(ctx, snapshot, issuer)
 	if err != nil {
-		return err
+		return "", err
 	}
 	var codes codeStore
 	defer func() {
@@ -150,12 +152,11 @@ func enrollDevice(ctx context.Context, store configuration.Store, layout host.La
 				return nil
 			}
 		}
-		if current.Enrollment == nil {
-			check, cancel := context.WithTimeout(ctx, 30*time.Second)
-			defer cancel()
-			if err := checkFreshWorkloadVolumes(check, session, input); err != nil {
-				return err
-			}
+		check, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		attached, err := checkWorkloadVolumes(check, session, input, current.Enrollment == nil)
+		if err != nil {
+			return err
 		}
 		if ctx.Err() != nil {
 			return enrollmentWaitError(ctx)
@@ -170,7 +171,7 @@ func enrollDevice(ctx context.Context, store configuration.Store, layout host.La
 			}
 			codes = next
 		}
-		if err := session.BeginEnrollment(input); err != nil {
+		if err := session.BeginEnrollment(input, attached); err != nil {
 			return err
 		}
 		if current.Enrollment != nil && code != "" {
@@ -186,11 +187,11 @@ func enrollDevice(ctx context.Context, store configuration.Store, layout host.La
 			break
 		}
 		if !errors.Is(err, configuration.ErrBusy) {
-			return err
+			return "", err
 		}
 		select {
 		case <-ctx.Done():
-			return enrollmentWaitError(ctx)
+			return "", enrollmentWaitError(ctx)
 		case <-ticker.C:
 		}
 	}
@@ -198,23 +199,30 @@ func enrollDevice(ctx context.Context, store configuration.Store, layout host.La
 	for {
 		observed, err := store.Snapshot()
 		if err != nil {
-			return err
+			return "", err
 		}
 		if observed.Enrollment == nil || observed.Enrollment.Profile.AuthIssuer != issuer {
-			return configuration.ErrIdentityConflict
+			return "", configuration.ErrIdentityConflict
 		}
 		switch observed.Enrollment.Outcome {
 		case configuration.Enrolled:
-			return nil
+			return enrollmentDataResult(observed.Enrollment.AttachedUserData), nil
 		case configuration.Failed:
-			return errEnrollmentFailed
+			return "", errEnrollmentFailed
 		}
 		select {
 		case <-ctx.Done():
-			return enrollmentWaitError(ctx)
+			return "", enrollmentWaitError(ctx)
 		case <-ticker.C:
 		}
 	}
+}
+
+func enrollmentDataResult(attached bool) string {
+	if attached {
+		return "attached"
+	}
+	return "created"
 }
 
 func enrollmentInput(ctx context.Context, snapshot configuration.Snapshot, issuer string) (*configuration.Input, error) {

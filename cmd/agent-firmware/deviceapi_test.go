@@ -26,7 +26,7 @@ func TestRemovedKeyPreparationCommandsRejectRequests(t *testing.T) {
 	for _, command := range []string{"device-api-init", "prepare-device-api", "configure", "enrollment-code-set", "enrollment-code-clear"} {
 		var out, stderr bytes.Buffer
 		if code := run([]string{command}, strings.NewReader(""), &out, &stderr); code != 2 || out.Len() != 0 ||
-			stderr.String() != "{\"error_code\":\"invalid_usage\"}\n" {
+			!strings.HasSuffix(stderr.String(), "{\"error_code\":\"invalid_usage\"}\n") {
 			t.Fatalf("removed command %q: code=%d, stderr=%s", command, code, &stderr)
 		}
 	}
@@ -39,7 +39,7 @@ func TestEnrollmentCodeIsNeverAnArgument(t *testing.T) {
 		{"enroll", "--issuer", "https://auth.example", "--enrollment-code-stdin", "--enrollment-code-file", "a"},
 	} {
 		var out, err bytes.Buffer
-		if code := run(args, strings.NewReader(""), &out, &err); code != 2 || out.Len() != 0 || err.String() != `{"error_code":"invalid_usage"}`+"\n" {
+		if code := run(args, strings.NewReader(""), &out, &err); code != 2 || out.Len() != 0 || !strings.HasSuffix(err.String(), `{"error_code":"invalid_usage"}`+"\n") {
 			t.Fatalf("unexpected result: %d %s", code, err.String())
 		}
 	}

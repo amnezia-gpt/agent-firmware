@@ -12,7 +12,7 @@ import (
 )
 
 func TestReleaseVectorsBuildAndApplyAnotherStack(t *testing.T) {
-	raw, err := os.ReadFile("../../.agents/plans/SELF-21/workload-release-v3.vectors.json")
+	raw, err := os.ReadFile("../../.agents/plans/SELF-24/workload-release-v4.vectors.json")
 	if err != nil {
 		t.Fatal(err)
 	}

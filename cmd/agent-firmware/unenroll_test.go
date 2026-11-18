@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/amnezia-gpt/agent-firmware/internal/configuration"
+	"github.com/amnezia-gpt/agent-firmware/internal/dockerengine"
 	"github.com/amnezia-gpt/agent-firmware/internal/host"
 	"github.com/amnezia-gpt/agent-firmware/internal/workload"
 )
@@ -30,14 +31,18 @@ func (f *fakeRemoval) Deregister(_ context.Context, stack workload.Stack) (strin
 	return "", errors.New("domain unavailable")
 }
 
-func (f *fakeRemoval) RemoveEnrollment(_ context.Context, id string) error {
+func (f *fakeRemoval) RemoveEnrollment(_ context.Context, id string, deleteData bool) error {
 	f.removals++
-	if id != f.installation || f.removals == 1 {
+	if deleteData || id != f.installation || f.removals == 1 {
 		return workload.ErrEngine
 	}
 	return nil
 }
-func (f *fakeRemoval) Close() {}
+func (f *fakeRemoval) Close()                                     {}
+func (f *fakeRemoval) CheckRemoval(context.Context, string) error { return nil }
+func (f *fakeRemoval) RetainedData(_ context.Context, id string) ([]dockerengine.VolumeInfo, error) {
+	return []dockerengine.VolumeInfo{{Name: "af-" + id + "-work", Issuer: "https://auth.example"}}, nil
+}
 
 func TestUnenrollResumesLocalRemovalWithoutDomain(t *testing.T) {
 	temp := t.TempDir()
@@ -56,7 +61,7 @@ func TestUnenrollResumesLocalRemovalWithoutDomain(t *testing.T) {
 	}
 	issuer := input.Profile().AuthIssuer
 	prepare := func(s *configuration.Session) error {
-		if err := s.BeginEnrollment(input); err != nil {
+		if err := s.BeginEnrollment(input, false); err != nil {
 			return err
 		}
 		return s.SetOutcome(issuer, configuration.Enrolled, false)
@@ -81,7 +86,7 @@ func TestUnenrollResumesLocalRemovalWithoutDomain(t *testing.T) {
 		return nil
 	}
 
-	if _, err := unenrollDevice(t.Context(), store, layout); err != workload.ErrEngine {
+	if _, err := unenrollDevice(t.Context(), store, layout, false); err != workload.ErrEngine {
 		t.Fatalf("unexpected interrupted removal: %v", err)
 	}
 	pending, err := store.Snapshot()
@@ -91,10 +96,13 @@ func TestUnenrollResumesLocalRemovalWithoutDomain(t *testing.T) {
 	if got, err := executeManaged(t.Context(), store, nil); err != nil || !got.Applied {
 		t.Fatalf("supervisor tried to recreate a removing enrollment: %+v %v", got, err)
 	}
-	outcome, err := unenrollDevice(t.Context(), store, layout)
-	if err != nil || outcome != configuration.DeregistrationUnavailable || fake.deregistrations != 1 ||
+	if _, err := unenrollDevice(t.Context(), store, layout, true); err != configuration.ErrRemovalIntent || fake.removals != 1 {
+		t.Fatalf("a retry widened the removal: %v", err)
+	}
+	outcome, err := unenrollDevice(t.Context(), store, layout, false)
+	if err != nil || outcome.Deregistration != configuration.DeregistrationUnavailable || len(outcome.KeptVolumes) != 1 || outcome.DeleteDataCommand == "" || fake.deregistrations != 1 ||
 		fake.removals != 2 || fake.purges != 1 {
-		t.Fatalf("wrong resume: outcome=%q, calls=%+v, err=%v", outcome, fake, err)
+		t.Fatalf("wrong resume: outcome=%+v, calls=%+v, err=%v", outcome, fake, err)
 	}
 	after, err := store.Snapshot()
 	if err != nil || lifecycle(after) != manufactured || after.Removal != nil || after.Enrollment != nil {
@@ -119,7 +127,7 @@ func TestUnenrollResumesLocalRemovalWithoutDomain(t *testing.T) {
 func TestUnenrollRequiresExplicitConfirmation(t *testing.T) {
 	var output bytes.Buffer
 	if got := run([]string{"unenroll"}, nil, io.Discard, &output); got != 2 ||
-		!strings.Contains(output.String(), "volumes") || !strings.Contains(output.String(), "confirmation_required") {
+		!strings.Contains(output.String(), "--delete-data") || !strings.Contains(output.String(), "confirmation_required") {
 		t.Fatalf("unexpected result %d %q", got, &output)
 	}
 }

@@ -58,7 +58,7 @@ func ParseDevice(reader io.Reader) (*Device, error) {
 	return &Device{release: release, raw: raw, generation: "sha256:" + hex.EncodeToString(hash[:])}, nil
 }
 
-func checkLegacy(root *os.Root) error {
+func checkCombinedState(root *os.Root) error {
 	if _, err := root.Lstat(host.LegacyState); err == nil {
 		return ErrLegacy
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -76,11 +76,30 @@ func (s Store) CheckLegacy() error {
 		return err
 	}
 	defer root.Close()
-	return checkLegacy(root)
+	if err := checkCombinedState(root); err != nil {
+		return err
+	}
+	data, err := readRecord(root, host.DeviceState)
+	if errors.Is(err, ErrMissing) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var record deviceRecord
+	if json.Unmarshal(data, &record) == nil && record.Version == 2 && earlierRelease(record.Release) {
+		return ErrLegacy
+	}
+	return nil
+}
+
+func earlierRelease(raw []byte) bool {
+	fields, ok := strictjson.Members(raw)
+	return ok && string(bytes.TrimSpace(fields["schema_version"])) == "3"
 }
 
 func loadDevice(root *os.Root) (*Device, error) {
-	if err := checkLegacy(root); err != nil {
+	if err := checkCombinedState(root); err != nil {
 		return nil, err
 	}
 	data, err := readRecord(root, host.DeviceState)
@@ -105,6 +124,9 @@ func loadDevice(root *os.Root) (*Device, error) {
 	var r deviceRecord
 	if json.Unmarshal(data, &r) != nil {
 		return nil, ErrCorrupt
+	}
+	if earlierRelease(r.Release) {
+		return nil, ErrLegacy
 	}
 	device, err := ParseDevice(bytes.NewReader(r.Release))
 	if err != nil || device.generation != r.Generation {

@@ -14,6 +14,8 @@ import (
 
 type Error string
 
+const ErrRetainedVolumes Error = "retained_firmware_volumes"
+
 func (e Error) Error() string { return string(e) }
 
 const (

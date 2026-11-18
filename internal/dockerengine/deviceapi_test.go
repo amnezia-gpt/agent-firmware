@@ -68,8 +68,8 @@ func TestCreateUsesManifestUserAndNamedVolumes(t *testing.T) {
 }
 
 func TestDataVolumeAlonePreventsFreshKeyBootstrap(t *testing.T) {
-	id := strings.Repeat("1", 32)
-	s := workload.Stack{Installation: id, Volumes: []string{"af-" + id + "-identity", "af-" + id + "-gateway-state"}}
+	id := workload.EnrollmentID("https://auth.example")
+	s := workload.Stack{Installation: id, Issuer: "https://auth.example"}
 	path := socketServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/_ping" {
 			w.Header().Set("API-Version", "1.52")
@@ -89,8 +89,8 @@ func TestDataVolumeAlonePreventsFreshKeyBootstrap(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer e.Close()
-	found, err := e.AnyVolumesExist(t.Context(), s)
-	if err != nil || !found {
+	_, err = e.CheckEnrollmentVolumes(t.Context(), s, true)
+	if err != workload.ErrVolumeUnclassified {
 		t.Fatal("missing identity allowed reset despite credential data")
 	}
 }

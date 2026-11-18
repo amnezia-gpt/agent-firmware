@@ -14,6 +14,7 @@ import (
 	"github.com/amnezia-gpt/agent-firmware/internal/host"
 	"github.com/amnezia-gpt/agent-firmware/internal/installer"
 	"github.com/amnezia-gpt/agent-firmware/internal/service"
+	"github.com/amnezia-gpt/agent-firmware/internal/workload"
 )
 
 type hostFirmware struct {
@@ -32,6 +33,16 @@ func (f hostFirmware) Preflight(ctx context.Context) error {
 	}
 	defer engine.Close()
 	if err := engine.Prerequisites(ctx); err != nil {
+		return err
+	}
+	snapshot, err := f.store.Snapshot()
+	if errors.Is(err, configuration.ErrMissing) {
+		err = engine.CheckManufactureVolumes(ctx)
+	} else if err == nil && snapshot.Enrollment != nil {
+		stack := workload.VolumeStack(f.device.Release(), snapshot.Enrollment.Profile.AuthIssuer)
+		_, err = engine.CheckEnrollmentVolumes(ctx, stack, false)
+	}
+	if err != nil {
 		return err
 	}
 	return engine.PrepareImages(ctx, f.device.Release())
@@ -59,14 +70,7 @@ func (f hostFirmware) Manufacture(ctx context.Context) error {
 			return err
 		}
 		defer engine.Close()
-		retained, err := engine.HasManagedVolumes(ctx)
-		if err != nil {
-			return err
-		}
-		if retained {
-			return configuration.ErrRootSecret
-		}
-		return nil
+		return engine.CheckManufactureVolumes(ctx)
 	})
 	if err != nil {
 		return err

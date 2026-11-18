@@ -1,0 +1,336 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "urn:agent-firmware:workload-release:v4",
+ "title": "Workload release manifest, schema 4",
+ "description": "SELF-24, accepted by the owner on 2026-11-18; not implemented yet. Schema 3 with one change: every volume declares its retention class. Describes the workload stack one firmware release installs. The firmware applies any manifest that passes this schema and the semantic rules of SELF-21 DESIGN.md and SELF-24 DESIGN.md inside a fixed safety envelope the manifest cannot change. Unknown members are rejected. At most 64 KiB.",
+ "type": "object",
+ "additionalProperties": false,
+ "required": [
+  "schema_version",
+  "kind",
+  "release",
+  "source_revision",
+  "device_api",
+  "platforms",
+  "volumes",
+  "services",
+  "device_api_client"
+ ],
+ "properties": {
+  "schema_version": {
+   "const": 4
+  },
+  "kind": {
+   "const": "workload-release"
+  },
+  "release": {
+   "type": "string",
+   "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+  },
+  "source_revision": {
+   "type": "string",
+   "pattern": "^[a-f0-9]{40}$"
+  },
+  "device_api": {
+   "const": "urn:agent-firmware:device-api:v3",
+   "description": "The device API version the workloads expect. The firmware refuses a version it does not serve."
+  },
+  "platforms": {
+   "type": "array",
+   "minItems": 1,
+   "maxItems": 4,
+   "uniqueItems": true,
+   "items": {
+    "enum": [
+     "linux/amd64",
+     "linux/arm64"
+    ]
+   },
+   "description": "Platforms every image digest resolves for. The firmware requires the host platform to be listed."
+  },
+  "volumes": {
+   "type": "object",
+   "maxProperties": 16,
+   "propertyNames": {
+    "pattern": "^[a-z][a-z0-9-]{0,31}$"
+   },
+   "additionalProperties": {
+    "$ref": "#/$defs/volume"
+   },
+   "description": "Named volumes of the stack, by name. Every volume a service mounts is declared here, and every declared volume is mounted at least once."
+  },
+  "services": {
+   "type": "object",
+   "minProperties": 1,
+   "maxProperties": 8,
+   "propertyNames": {
+    "pattern": "^[a-z][a-z0-9-]{0,31}$"
+   },
+   "additionalProperties": {
+    "$ref": "#/$defs/service"
+   }
+  },
+  "device_api_client": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "service",
+    "dial",
+    "enrollment_status",
+    "deregister"
+   ],
+   "properties": {
+    "service": {
+     "type": "string",
+     "pattern": "^[a-z][a-z0-9-]{0,31}$",
+     "description": "The one service that talks to the device API."
+    },
+    "dial": {
+     "type": "array",
+     "minItems": 1,
+     "maxItems": 8,
+     "items": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[^\\u0000-\\u001f]+$"
+     },
+     "description": "Connects the service's in-container link socket to its standard streams; the firmware serves the device API on that stream. Argument vector run by exec in the client service as that service's user. No shell."
+    },
+    "enrollment_status": {
+     "type": "array",
+     "minItems": 1,
+     "maxItems": 8,
+     "items": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[^\\u0000-\\u001f]+$"
+     },
+     "description": "Prints one control result (see $defs/control_result) with state enrolled, pending or failed. Argument vector run by exec in the client service as that service's user. No shell."
+    },
+    "deregister": {
+     "type": "array",
+     "minItems": 1,
+     "maxItems": 8,
+     "items": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[^\\u0000-\\u001f]+$"
+     },
+     "description": "Removes the registration at the domain and prints one control result with state deregistered or failed. Argument vector run by exec in the client service as that service's user. No shell."
+    }
+   }
+  }
+ },
+ "$defs": {
+  "volume": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "retention"
+   ],
+   "properties": {
+    "retention": {
+     "enum": [
+      "enrollment",
+      "user-data"
+     ],
+     "description": "When the firmware removes the volume. enrollment: with the enrollment (unenroll, decommission); for credentials, tokens, caches and anything bound to this enrollment's keys. user-data: only on an explicit request to delete data; survives update, rollback, unenroll, decommission and a later install, and is attached again by an enrollment in the same domain. There is no default."
+    }
+   },
+   "description": "Declaration of one volume. The firmware reads nothing else about a volume and never inspects its content."
+  },
+  "service": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "image",
+    "health_start_seconds",
+    "stop_grace_seconds"
+   ],
+   "properties": {
+    "image": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "repository",
+      "digest"
+     ],
+     "properties": {
+      "repository": {
+       "type": "string",
+       "maxLength": 255,
+       "pattern": "^[a-z0-9]+([._-][a-z0-9]+)*(:[0-9]{1,5})?(/[a-z0-9]+([._-][a-z0-9]+)*)+$",
+       "description": "Registry and path without a tag."
+      },
+      "digest": {
+       "type": "string",
+       "pattern": "^sha256:[a-f0-9]{64}$",
+       "description": "Digest of the image index covering every listed platform."
+      }
+     }
+    },
+    "user": {
+     "type": "string",
+     "pattern": "^[1-9][0-9]{0,9}:[1-9][0-9]{0,9}$",
+     "description": "Numeric UID:GID. Omitted: the image's user, which must not be root."
+    },
+    "read_only": {
+     "type": "boolean",
+     "default": false,
+     "description": "Read-only root filesystem."
+    },
+    "aliases": {
+     "type": "array",
+     "maxItems": 4,
+     "uniqueItems": true,
+     "items": {
+      "type": "string",
+      "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+     },
+     "description": "Names of this service on the enrollment's private network, unique across services."
+    },
+    "depends_on": {
+     "type": "array",
+     "maxItems": 7,
+     "uniqueItems": true,
+     "items": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,31}$"
+     },
+     "description": "Services that must be healthy before this one starts."
+    },
+    "environment": {
+     "type": "object",
+     "maxProperties": 32,
+     "propertyNames": {
+      "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+     },
+     "additionalProperties": {
+      "$ref": "#/$defs/value"
+     }
+    },
+    "volumes": {
+     "type": "array",
+     "maxItems": 16,
+     "items": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "source",
+       "target"
+      ],
+      "properties": {
+       "source": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9-]{0,31}$",
+        "description": "A name from the top-level volumes."
+       },
+       "target": {
+        "type": "string",
+        "maxLength": 255,
+        "pattern": "^/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$",
+        "description": "Absolute clean path in the container."
+       },
+       "read_only": {
+        "type": "boolean",
+        "default": false
+       }
+      }
+     }
+    },
+    "health_start_seconds": {
+     "type": "integer",
+     "minimum": 1,
+     "maximum": 600,
+     "description": "Start period of the image's own health check."
+    },
+    "stop_grace_seconds": {
+     "type": "integer",
+     "minimum": 1,
+     "maximum": 120
+    }
+   }
+  },
+  "value": {
+   "oneOf": [
+    {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "value"
+     ],
+     "properties": {
+      "value": {
+       "type": "string",
+       "maxLength": 4096,
+       "pattern": "^[^\\u0000]*$"
+      }
+     }
+    },
+    {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "from"
+     ],
+     "properties": {
+      "from": {
+       "enum": [
+        "issuer",
+        "trust_bundle",
+        "trust_bundle_sha256"
+       ]
+      }
+     }
+    },
+    {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "from",
+      "scope"
+     ],
+     "properties": {
+      "from": {
+       "const": "resource"
+      },
+      "scope": {
+       "type": "string",
+       "minLength": 1,
+       "maxLength": 128,
+       "pattern": "^[\\x21\\x23-\\x5B\\x5D-\\x7E]+$",
+       "description": "OAuth scope token (RFC 6749 section 3.3)."
+      }
+     }
+    }
+   ],
+   "description": "A constant, or a value the firmware takes from the domain at enrollment: the issuer; the issuer's public signature keys as the pinned trust bundle and its SHA-256; or the identifier of the single protected resource of the issuer that lists the scope (RFC 9728). No templates and no interpolation."
+  },
+  "control_result": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "state"
+   ],
+   "properties": {
+    "state": {
+     "enum": [
+      "enrolled",
+      "pending",
+      "failed",
+      "deregistered"
+     ]
+    },
+    "reason": {
+     "type": "string",
+     "pattern": "^[a-z][a-z0-9_]{0,63}$",
+     "description": "Optional bounded code for diagnostics. Never a secret."
+    }
+   },
+   "description": "What a control command prints on standard output: one JSON object of at most 4 KiB, exit status 0. Anything else is treated as unavailable and retried within the firmware's deadline."
+  }
+ }
+}

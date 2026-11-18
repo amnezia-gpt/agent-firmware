@@ -17,9 +17,15 @@ import (
 	"github.com/amnezia-gpt/agent-firmware/internal/workload"
 )
 
-type removalEngine interface {
+type deregistrationEngine interface {
 	Deregister(context.Context, workload.Stack) (string, error)
-	RemoveEnrollment(context.Context, string) error
+}
+
+type removalEngine interface {
+	deregistrationEngine
+	RemoveEnrollment(context.Context, string, bool) error
+	CheckRemoval(context.Context, string) error
+	RetainedData(context.Context, string) ([]dockerengine.VolumeInfo, error)
 	Close()
 }
 
@@ -36,11 +42,12 @@ var purgeEnrollmentCode = func(layout host.Layout, id string) error {
 }
 
 func runUnenroll(args []string, stdout, stderr io.Writer) int {
-	if len(args) > 1 || len(args) == 1 && args[0] != "--confirm" {
+	confirmed, deleteData, valid := removalFlags(args)
+	if !valid {
 		return report(stderr, "invalid_usage", 2)
 	}
-	const description = "Unenroll removes the domain connection, workload containers, network, volumes, and operational keys.\n"
-	if len(args) == 0 {
+	const description = "Unenroll removes the domain connection, workloads, and operational keys. Add --delete-data to erase this domain's user data.\n"
+	if !confirmed {
 		_, _ = io.WriteString(stderr, description+"Run agent-firmware unenroll --confirm to proceed.\n")
 		return report(stderr, "confirmation_required", 2)
 	}
@@ -52,30 +59,22 @@ func runUnenroll(args []string, stdout, stderr io.Writer) int {
 	defer stop()
 	ctx, cancel := context.WithTimeout(parent, 5*time.Minute)
 	defer cancel()
-	outcome, err := unenrollDevice(ctx, configuration.Store{Path: defaultStateDir}, hostLayout)
+	result, err := unenrollDevice(ctx, configuration.Store{Path: defaultStateDir}, hostLayout, deleteData)
 	if err != nil {
 		return report(stderr, err.Error(), 1)
 	}
-	return respond(stdout, stderr, struct {
-		State          string `json:"state"`
-		Deregistration string `json:"deregistration"`
-	}{"manufactured", outcome})
+	return respond(stdout, stderr, result)
 }
 
-func unenrollDevice(ctx context.Context, store configuration.Store, layout host.Layout) (string, error) {
+func unenrollDevice(ctx context.Context, store configuration.Store, layout host.Layout, deleteData bool) (removalResult, error) {
 	unlock, err := installer.Lock(layout)
 	if err != nil {
-		return "", err
+		return removalResult{}, err
 	}
 	defer unlock()
-	result := "not_requested"
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		if ctx.Err() != nil {
-			return "", workload.ErrCanceled
-		}
-		err := store.Exclusive(func(session *configuration.Session) error {
+	result := removalResponse("manufactured", configuration.NoDeregistration, nil, false)
+	err = withStateLock(ctx, func() error {
+		return store.Exclusive(func(session *configuration.Session) error {
 			snapshot, err := session.Snapshot()
 			if err != nil {
 				return err
@@ -88,13 +87,14 @@ func unenrollDevice(ctx context.Context, store configuration.Store, layout host.
 				installation = workload.EnrollmentID(snapshot.Enrollment.Profile.AuthIssuer)
 			}
 			removal := snapshot.Removal
-			if removal == nil {
-				removal, err = session.BeginRemoval(installation)
-				if err != nil {
-					return err
+			if removal != nil {
+				if installation != "" && removal.Installation != installation {
+					return configuration.ErrCorrupt
 				}
-			} else if installation != "" && removal.Installation != installation {
-				return configuration.ErrCorrupt
+				if removal.DeleteData != deleteData {
+					return configuration.ErrRemovalIntent
+				}
+				installation = removal.Installation
 			}
 			address, err := session.EngineAddress()
 			if err != nil {
@@ -105,6 +105,15 @@ func unenrollDevice(ctx context.Context, store configuration.Store, layout host.
 				return err
 			}
 			defer engine.Close()
+			if err := engine.CheckRemoval(ctx, installation); err != nil {
+				return err
+			}
+			if removal == nil {
+				removal, err = session.BeginRemoval(installation, deleteData)
+				if err != nil {
+					return err
+				}
+			}
 			if removal.Deregistration == configuration.DeregistrationPending {
 				outcome := deregister(ctx, engine, snapshot)
 				if ctx.Err() != nil {
@@ -114,30 +123,46 @@ func unenrollDevice(ctx context.Context, store configuration.Store, layout host.
 					return err
 				}
 			}
-			if err := engine.RemoveEnrollment(ctx, removal.Installation); err != nil {
+			if err := engine.RemoveEnrollment(ctx, removal.Installation, removal.DeleteData); err != nil {
 				return err
 			}
 			if err := purgeEnrollmentCode(layout, removal.Installation); err != nil {
 				return err
 			}
+			kept, err := engine.RetainedData(ctx, removal.Installation)
+			if err != nil {
+				return err
+			}
 			if err := session.FinishRemoval(removal.Installation); err != nil {
 				return err
 			}
-			result = removal.Deregistration
+			result = removalResponse("manufactured", removal.Deregistration, kept, false)
 			return nil
 		})
+	})
+	return result, err
+}
+
+func withStateLock(ctx context.Context, operation func() error) error {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if ctx.Err() != nil {
+			return workload.ErrCanceled
+		}
+		err := operation()
 		if !errors.Is(err, configuration.ErrBusy) {
-			return result, err
+			return err
 		}
 		select {
 		case <-ctx.Done():
-			return "", workload.ErrCanceled
+			return workload.ErrCanceled
 		case <-ticker.C:
 		}
 	}
 }
 
-func deregister(ctx context.Context, engine removalEngine, snapshot configuration.Snapshot) string {
+func deregister(ctx context.Context, engine deregistrationEngine, snapshot configuration.Snapshot) string {
 	if snapshot.Enrollment == nil {
 		return configuration.DeregistrationUnavailable
 	}

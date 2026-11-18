@@ -11,6 +11,7 @@ import (
 )
 
 const ErrRemovalPending Error = "enrollment_removal_pending"
+const ErrRemovalIntent Error = "removal_intent_mismatch"
 const removalFile = "enrollment-removal.json"
 const detachedEnrollment = "removed-enrollment"
 
@@ -27,6 +28,7 @@ type Removal struct {
 	Version        int    `json:"schema_version"`
 	Installation   string `json:"installation"`
 	Deregistration string `json:"deregistration"`
+	DeleteData     bool   `json:"delete_data"`
 }
 
 func loadRemoval(root *os.Root) (*Removal, error) {
@@ -37,9 +39,10 @@ func loadRemoval(root *os.Root) (*Removal, error) {
 	if err != nil {
 		return nil, err
 	}
-	fields, ok := strictjson.Object(raw, "schema_version", "installation", "deregistration")
+	fields, ok := strictjson.Object(raw, "schema_version", "installation", "deregistration", "delete_data")
+	intent := string(fields["delete_data"])
 	var removal Removal
-	if !ok || string(fields["schema_version"]) != "1" || json.Unmarshal(raw, &removal) != nil ||
+	if !ok || string(fields["schema_version"]) != "2" || intent != "true" && intent != "false" || json.Unmarshal(raw, &removal) != nil ||
 		!enrollmentIDPattern.MatchString(removal.Installation) || !validDeregistration(removal.Deregistration) {
 		return nil, ErrCorrupt
 	}
@@ -55,14 +58,17 @@ func validDeregistration(outcome string) bool {
 	}
 }
 
-func (s *Session) BeginRemoval(id string) (*Removal, error) {
+func (s *Session) BeginRemoval(id string, deleteData bool) (*Removal, error) {
 	if !enrollmentIDPattern.MatchString(id) {
 		return nil, ErrInvalid
 	}
 	if pending, err := loadRemoval(s.root); err != nil || pending != nil {
+		if pending != nil && pending.DeleteData != deleteData {
+			return nil, ErrRemovalIntent
+		}
 		return pending, err
 	}
-	removal := &Removal{1, id, DeregistrationPending}
+	removal := &Removal{Version: 2, Installation: id, Deregistration: DeregistrationPending, DeleteData: deleteData}
 	return removal, s.writeRemoval(removal)
 }
 
