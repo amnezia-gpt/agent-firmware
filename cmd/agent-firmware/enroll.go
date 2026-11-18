@@ -28,6 +28,8 @@ const (
 	errWorkloadUnavailable    configuration.Error = "workload_unavailable"
 )
 
+var errEnrollmentProbePending = errors.New("enrollment probe pending")
+
 type enrollmentResult struct {
 	State      string `json:"state"`
 	Enrollment string `json:"enrollment"`
@@ -151,6 +153,10 @@ func enrollDevice(ctx context.Context, store configuration.Store, layout host.La
 			return reply, err
 		}
 	}
+	deadline, bounded := prepareCtx.Deadline()
+	preparationExpired := func() bool {
+		return prepareCtx.Err() != nil || bounded && !time.Now().Before(deadline)
+	}
 	var codes codeStore
 	defer func() {
 		if codes != nil {
@@ -170,7 +176,7 @@ func enrollDevice(ctx context.Context, store configuration.Store, layout host.La
 				return configuration.ErrIdentityConflict
 			}
 			if err := checkRenewal(prepareCtx, session, current, layout, len(code) != 0); err != nil {
-				if prepareCtx.Err() != nil {
+				if preparationExpired() {
 					return enrollmentPreparationError(ctx)
 				}
 				return err
@@ -195,7 +201,7 @@ func enrollDevice(ctx context.Context, store configuration.Store, layout host.La
 				return err
 			}
 		}
-		if prepareCtx.Err() != nil {
+		if preparationExpired() {
 			return enrollmentPreparationError(ctx)
 		}
 		if len(code) != 0 {
@@ -216,17 +222,28 @@ func enrollDevice(ctx context.Context, store configuration.Store, layout host.La
 	progress("Preparing the enrollment")
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	for busy := false; ; {
+	var busy, awaitingStatus bool
+	for {
+		if preparationExpired() {
+			return reply, enrollmentPreparationError(ctx)
+		}
 		err := store.Exclusive(prepare)
 		if err == nil {
 			break
 		}
-		if !errors.Is(err, configuration.ErrBusy) {
+		switch {
+		case errors.Is(err, errEnrollmentProbePending):
+			if !awaitingStatus {
+				awaitingStatus = true
+				progress("Waiting for the workload to confirm its enrollment status")
+			}
+		case errors.Is(err, configuration.ErrBusy):
+			if !busy {
+				busy = true
+				progress("Waiting for the firmware service to finish its current step")
+			}
+		default:
 			return reply, err
-		}
-		if !busy {
-			busy = true
-			progress("Waiting for the firmware service to finish its current step")
 		}
 		select {
 		case <-prepareCtx.Done():
@@ -298,6 +315,11 @@ func checkRenewal(ctx context.Context, session *configuration.Session, snapshot 
 		}
 		return nil
 	default:
+		if outcome == dockerengine.EnrollmentPending {
+			// The workload may still be restoring its previous session. Retry
+			// outside the configuration lock before deciding whether to stage a code.
+			return errEnrollmentProbePending
+		}
 		return errWorkloadUnavailable
 	}
 }

@@ -22,10 +22,14 @@
 
 - The CLI probe inspects the installed image locally. A missing client leaves
   the persisted condition intact and the invocation fails closed.
+- A client that answers `pending` without a held code may still be restoring
+  its session. Retry inside the original 30-second budget, releasing the
+  configuration lock between calls.
 - A pre-existing domain binding determines whether the successful result is a
   renewal. The first command that creates the binding reports `created`.
 
 ## Status
 
-- Current state: Validating. Live recovery awaits a workload that reports `unenrolled`.
-- Plan route: `blocked` for the host test
+- Current state: Validating. Workload v0.5.1 reports `unenrolled`. The complete
+  installation command still needs a live run with the firmware startup retry.
+- Plan route: `ready-for-implementation` for the host test

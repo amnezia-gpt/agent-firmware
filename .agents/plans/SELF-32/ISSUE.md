@@ -24,6 +24,8 @@ with a clear message, when the device is working or its state cannot be read.
 
 - Probe the client service first (up to 30 seconds), then follow the table "`enroll`" in the design row by
   row: results, error codes, whether the code is stored.
+- Retry `pending` without a held code within the same budget. Release the configuration lock between
+  probes so the supervisor can keep serving the workload during startup.
 - Re-enrollment stores the code, marks the condition `enrollment_in_progress` and waits as the first enrollment
   does, with the same progress lines. It creates and removes nothing.
 - The result gains `enrollment`: `created` or `renewed`.
@@ -59,6 +61,11 @@ exercise the command with a fake workload. An existing binding inspects the loca
 container and runs the status exec. The tests compare the binding and both operational keys before
 and after retry. The native Linux amd64 run used disposable test directories, with Docker and systemd
 fakes. Live evidence for the repeated installation script remains open.
+
+On the disposable host, firmware v0.4.1 and workload v0.5.1 started successfully. The first `enroll`
+probe returned while the Gateway was still resolving its session. Gateway then reported `unenrolled`,
+and the firmware showed `identity_lost`. `TestEnrollWaitsForGatewayAfterRestart` reproduces the ordering
+and checks recovery, refusal for a restored session, and exhaustion of the 30-second budget.
 
 ## Next Action
 
