@@ -18,7 +18,7 @@ import (
 // Firmware only carries it from enroll to the workload: it checks
 // the outer bounds, holds the value on tmpfs for at most an hour and never
 // redeems, logs or reports it.
-const EnrollmentCapability = "urn:agent-firmware:device-service:enrollment-code"
+const EnrollmentCapability = "urn:agent-firmware:device-service:enrollment-code:v1"
 const ErrEnrollmentCode Error = "invalid_enrollment_code"
 const enrollmentFile = "enrollment-code"
 const enrollmentTTL = time.Hour

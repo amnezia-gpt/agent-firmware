@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -128,8 +129,15 @@ func TestEnrollmentCodeRoutes(t *testing.T) {
 	s, _ := testCodes(t)
 	h.enrollment = s
 	caps := callAPI(h, "GET", "/v3/capabilities", "")
-	if !strings.Contains(caps.Body.String(), EnrollmentCapability) {
-		t.Fatal("capability not advertised")
+	var advertised struct {
+		Capabilities []string `json:"capabilities"`
+	}
+	if err := json.Unmarshal(caps.Body.Bytes(), &advertised); caps.Code != 200 || err != nil {
+		t.Fatalf("invalid capabilities response: status %d, decode error %v", caps.Code, err)
+	}
+	const enrollmentCodeService = "urn:agent-firmware:device-service:enrollment-code:v1"
+	if !slices.Contains(advertised.Capabilities, enrollmentCodeService) {
+		t.Fatalf("capabilities %q must include %q", advertised.Capabilities, enrollmentCodeService)
 	}
 	if w := callAPI(h, "GET", "/v3/enrollment/code", ""); w.Code != 404 || !strings.Contains(w.Body.String(), `"not_found"`) {
 		t.Fatal("absent code is not 404")
