@@ -225,12 +225,48 @@ func TestDecommissionLegacyOnlyRemovesLocally(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(layout.State, host.LegacyState), accepted, 0600); err != nil {
 		t.Fatal(err)
 	}
+	legacyAPI := filepath.Join(layout.State, "device-api")
+	if err := os.Mkdir(legacyAPI, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"key.cred", "state.json"} {
+		if err := os.WriteFile(filepath.Join(legacyAPI, name), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	engine := &decommissionTestEngine{installation: "7f2097e2753d88bc0f3448d1178eeb74"}
+	lock := filepath.Join(legacyAPI, "api.lock")
+	if err := os.Symlink("state.json", lock); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testDecommission(t, layout, engine); err != configuration.ErrUnsafe || len(engine.calls) != 0 {
+		t.Fatalf("unsafe legacy lock reached removal: %v, calls %v", err, engine.calls)
+	}
+	if err := os.Remove(lock); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lock, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
 	got, err := testDecommission(t, layout, engine)
 	slices.Sort(engine.images)
 	if err != nil || got != configuration.LegacyDeregistration || !slices.Equal(engine.calls, []string{"check", "remove", "images"}) ||
 		!slices.Equal(engine.images, []string{first.Reference(), second.Reference()}) {
 		t.Fatalf("legacy got %q, %v, calls %v, images %v", got, err, engine.calls, engine.images)
+	}
+	if _, err := os.Lstat(layout.State); !os.IsNotExist(err) {
+		t.Fatalf("legacy state remains after decommission: %v", err)
+	}
+}
+
+func TestDecommissionUnsafeStorageHint(t *testing.T) {
+	const want = `agent-firmware: The state directory has an unexpected entry, owner or mode. Inspect its metadata:
+agent-firmware:   sudo find -P /var/lib/agent-firmware -xdev -maxdepth 2 -printf '%y %m %U:%G links=%n %p\n'
+{"error_code":"unsafe_state_storage"}
+`
+	var stderr bytes.Buffer
+	if code := reportDecommissionError(&stderr, configuration.ErrUnsafe); code != 1 || stderr.String() != want {
+		t.Fatalf("unexpected diagnostic: %d %q", code, stderr.String())
 	}
 }
 

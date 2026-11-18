@@ -47,9 +47,17 @@ func runDecommission(args []string, stdout, stderr io.Writer) int {
 	result, err := decommissionDevice(ctx, hostLayout, service.Systemd{Layout: hostLayout},
 		func(address string) (decommissionEngine, error) { return dockerengine.New(address) }, deleteData, progress)
 	if err != nil {
-		return report(stderr, err.Error(), 1)
+		return reportDecommissionError(stderr, err)
 	}
 	return respond(stdout, stderr, result)
+}
+
+func reportDecommissionError(stderr io.Writer, err error) int {
+	if errors.Is(err, configuration.ErrUnsafe) {
+		_, _ = io.WriteString(stderr, "agent-firmware: The state directory has an unexpected entry, owner or mode. Inspect its metadata:\n"+
+			"agent-firmware:   sudo find -P "+hostLayout.State+" -xdev -maxdepth 2 -printf '%y %m %U:%G links=%n %p\\n'\n")
+	}
+	return report(stderr, err.Error(), 1)
 }
 
 func decommissionDevice(ctx context.Context, layout host.Layout, services installer.ServiceManager,

@@ -112,6 +112,13 @@ Exact CLI tests cover the recovery hints for v0.1.x, v0.2.0 and retained firmwar
 volumes. The hints share the installation script URL used by `update`. Help
 distinguishes retaining older volumes from the cleanup that permits reinstalling.
 
+The first v0.3.1 decommission attempt against v0.1.5 reported
+`unsafe_state_storage` before teardown. A read-only inventory identified
+`device-api/api.lock`, which v0.1.5 creates with mode 0600. Cleanup now
+recognizes this legacy file and still checks its ownership, type and mode.
+An unsafe-state refusal gives a command to inspect file metadata. The
+regression fixture checks the real lock file and rejects a symlink at its path.
+
 ## Next Action
 
 Verify host behavior in the shared SELF-24 E2E with the published schema 4 workload release.

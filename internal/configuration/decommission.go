@@ -220,7 +220,7 @@ func (s *Session) checkDecommissionSubdir(name string, legacy bool) error {
 		file := entry.Name()
 		known := file == enrollmentState || pendingRecordName.MatchString(file)
 		if legacy {
-			known = file == "state.json" || file == "key.cred" || legacyStateTemp.MatchString(file)
+			known = file == "state.json" || file == "key.cred" || file == "api.lock" || legacyStateTemp.MatchString(file)
 		}
 		info, err := dir.Lstat(file)
 		if !known || err != nil || !privatefile.EffectiveOwner().Regular(info, 0600, false) {
