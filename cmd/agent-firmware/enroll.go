@@ -93,7 +93,9 @@ func runEnroll(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	ctx, cancel := context.WithTimeout(parent, 20*time.Minute)
 	defer cancel()
 	store := configuration.Store{Path: defaultStateDir}
-	userData, err := enrollDevice(ctx, store, hostLayout, issuer, code, time.Second)
+	// The wait can take minutes; without these lines the terminal looks hung.
+	progress := func(message string) { _, _ = io.WriteString(stderr, "agent-firmware: "+message+"\n") }
+	userData, err := enrollDevice(ctx, store, hostLayout, issuer, code, time.Second, progress)
 	if err != nil {
 		return report(stderr, err.Error(), 1)
 	}
@@ -103,7 +105,10 @@ func runEnroll(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}{"enrolled", userData})
 }
 
-func enrollDevice(ctx context.Context, store configuration.Store, layout host.Layout, issuer, code string, interval time.Duration) (userData string, result error) {
+// enrollmentHeartbeat is how often the wait reports that it is still running.
+const enrollmentHeartbeat = 15 * time.Second
+
+func enrollDevice(ctx context.Context, store configuration.Store, layout host.Layout, issuer, code string, interval time.Duration, progress func(string)) (userData string, result error) {
 	unlock, err := installer.Lock(layout)
 	if err != nil {
 		return "", err
@@ -126,6 +131,9 @@ func enrollDevice(ctx context.Context, store configuration.Store, layout host.La
 	}
 	if err := checkDeployableRelease(snapshot.Device.Release()); err != nil {
 		return "", err
+	}
+	if snapshot.Enrollment == nil {
+		progress("Reading the domain configuration")
 	}
 	input, err := enrollmentInput(ctx, snapshot, issuer)
 	if err != nil {
@@ -179,15 +187,20 @@ func enrollDevice(ctx context.Context, store configuration.Store, layout host.La
 		}
 		return nil
 	}
+	progress("Preparing the enrollment")
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	for {
+	for busy := false; ; {
 		err := store.Exclusive(prepare)
 		if err == nil {
 			break
 		}
 		if !errors.Is(err, configuration.ErrBusy) {
 			return "", err
+		}
+		if !busy {
+			busy = true
+			progress("Waiting for the firmware service to finish its current step")
 		}
 		select {
 		case <-ctx.Done():
@@ -196,6 +209,10 @@ func enrollDevice(ctx context.Context, store configuration.Store, layout host.La
 		}
 	}
 
+	progress("Starting the workloads and waiting for the domain to confirm the enrollment")
+	progress("This usually takes a few minutes. Do not interrupt")
+	started := time.Now()
+	reported := started
 	for {
 		observed, err := store.Snapshot()
 		if err != nil {
@@ -206,9 +223,14 @@ func enrollDevice(ctx context.Context, store configuration.Store, layout host.La
 		}
 		switch observed.Enrollment.Outcome {
 		case configuration.Enrolled:
+			progress("The domain confirmed the enrollment")
 			return enrollmentDataResult(observed.Enrollment.AttachedUserData), nil
 		case configuration.Failed:
 			return "", errEnrollmentFailed
+		}
+		if now := time.Now(); now.Sub(reported) >= enrollmentHeartbeat {
+			reported = now
+			progress("Still waiting for the enrollment (" + now.Sub(started).Round(time.Second).String() + ")")
 		}
 		select {
 		case <-ctx.Done():

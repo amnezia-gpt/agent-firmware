@@ -98,6 +98,13 @@ func TestEnrollmentRefusalAndRetryPreserveDeviceAndPinIssuer(t *testing.T) {
 	devicePath, rootPath := filepath.Join(store.Path, host.DeviceState), filepath.Join(store.Path, host.RootSecret)
 	manifestBefore, keyBefore := fixture(t, devicePath), fixture(t, rootPath)
 
+	var progressMu sync.Mutex
+	var progressLines []string
+	progress := func(message string) {
+		progressMu.Lock()
+		defer progressMu.Unlock()
+		progressLines = append(progressLines, message)
+	}
 	attempt := func(code string) (<-chan error, context.CancelFunc) {
 		t.Helper()
 		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
@@ -105,7 +112,7 @@ func TestEnrollmentRefusalAndRetryPreserveDeviceAndPinIssuer(t *testing.T) {
 		finished := make(chan struct{})
 		go func() {
 			defer close(finished)
-			_, err := enrollDevice(ctx, store, layout, issuer, code, time.Millisecond)
+			_, err := enrollDevice(ctx, store, layout, issuer, code, time.Millisecond, progress)
 			done <- err
 		}()
 		t.Cleanup(func() { cancel(); <-finished })
@@ -154,7 +161,7 @@ func TestEnrollmentRefusalAndRetryPreserveDeviceAndPinIssuer(t *testing.T) {
 	}
 	cancel()
 	show(enrollmentPending, false)
-	if _, err := enrollDevice(t.Context(), store, layout, "https://other.example", "", time.Millisecond); err != configuration.ErrIdentityConflict {
+	if _, err := enrollDevice(t.Context(), store, layout, "https://other.example", "", time.Millisecond, func(string) {}); err != configuration.ErrIdentityConflict {
 		t.Fatalf("a second issuer was accepted: %v", err)
 	}
 	done, cancel = attempt(secondCode)
@@ -169,12 +176,23 @@ func TestEnrollmentRefusalAndRetryPreserveDeviceAndPinIssuer(t *testing.T) {
 	}
 	cancel()
 	show(enrolled, true)
+	progressMu.Lock()
+	shown := strings.Join(progressLines, "\n")
+	progressMu.Unlock()
+	for _, want := range []string{"Reading the domain configuration", "waiting for the domain to confirm the enrollment", "The domain confirmed the enrollment"} {
+		if !strings.Contains(shown, want) {
+			t.Fatalf("the wait did not report %q:\n%s", want, shown)
+		}
+	}
+	if strings.Contains(shown, secondCode) {
+		t.Fatal("progress printed the enrollment code")
+	}
 
 	if _, err := store.Manufacture(device, nil); err != nil {
 		t.Fatal(err)
 	}
 	show(enrolled, true)
-	if got, err := enrollDevice(t.Context(), store, layout, issuer, "", time.Millisecond); err != nil || got != "attached" {
+	if got, err := enrollDevice(t.Context(), store, layout, issuer, "", time.Millisecond, func(string) {}); err != nil || got != "attached" {
 		t.Fatalf("retry lost attachment result: %q, %v", got, err)
 	}
 	if discoveries != 1 || checks != 2 {
