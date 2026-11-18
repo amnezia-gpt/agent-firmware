@@ -23,7 +23,8 @@ digest() {
  else shasum -a 256 "$1" | cut -d ' ' -f 1; fi
 }
 
-# Release CI passes the original asset downloaded from the selected workload release.
+# Set by whoever replaces the pin, to compare it with the asset downloaded from
+# the selected workload release. Release CI cannot download that asset.
 if [ "${WORKLOAD_PUBLISHED_MANIFEST+x}" = x ]; then
  [ -f "$WORKLOAD_PUBLISHED_MANIFEST" ] && cmp -s "$workload" "$WORKLOAD_PUBLISHED_MANIFEST" \
   || { echo 'the workload release pin differs from the published manifest' >&2; exit 1; }

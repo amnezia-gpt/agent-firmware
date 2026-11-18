@@ -24,17 +24,12 @@ jobs:
           test -z "$(gofmt -l cmd internal)"
           go vet ./...
           CGO_ENABLED=0 go test ./...
-      - name: Verify the published workload manifest and build assets
-        env:
-          WORKLOAD_MANIFEST_URL: ${{ vars.WORKLOAD_MANIFEST_URL }}
-        run: |
-          : "${WORKLOAD_MANIFEST_URL:?set the published workload manifest asset URL}"
-          manifest=$(mktemp)
-          trap 'rm -f "$manifest"' EXIT
-          curl --fail --silent --show-error --location --max-redirs 3 \
-            --proto '=https' --proto-redir '=https' --max-time 30 --max-filesize 65536 \
-            --output "$manifest" "$WORKLOAD_MANIFEST_URL"
-          WORKLOAD_PUBLISHED_MANIFEST="$manifest" sh scripts/build-release.sh "$GITHUB_REF_NAME" dist
+      # The pinned workload release is not compared with the published one here:
+      # the workloads repository is not public, so this job cannot download it.
+      # Whoever replaces release/workload-release.json compares it by hand with
+      # WORKLOAD_PUBLISHED_MANIFEST set for scripts/build-release.sh.
+      - name: Build assets
+        run: sh scripts/build-release.sh "$GITHUB_REF_NAME" dist
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}

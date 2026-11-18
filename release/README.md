@@ -4,10 +4,14 @@ The release job requires a published schema 4 workload release manifest and
 a firmware binary that serves the Device API the manifest declares. The current
 pin is the published workload v0.5.0 manifest.
 
-Configure `WORKLOAD_MANIFEST_URL` for the exact published manifest asset.
-The workflow downloads it over HTTPS and compares its bytes with
-`release/workload-release.json` before building release assets. Store the
-published file verbatim. Preserve its whitespace and final newline.
+Store the published file verbatim in `release/workload-release.json`. Preserve
+its whitespace and final newline. The release job cannot download the published
+manifest, so it does not compare the two. Whoever replaces the pin compares them
+once, with the downloaded asset:
+
+```sh
+WORKLOAD_PUBLISHED_MANIFEST=manifest.json sh scripts/build-release.sh v0.0.0 /tmp/agent-firmware-pin-check
+```
 
 The release script also runs `agent-firmware validate-release`. The check
 covers schema, target platform and runtime Device API compatibility. The

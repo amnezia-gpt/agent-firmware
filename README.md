@@ -203,10 +203,10 @@ When building a stack, the firmware resolves each scope requested by the
 manifest to exactly one resource. An update may refresh the resource list once
 for a missing scope. The signing keys pinned at enrollment are retained.
 
-A pushed `v*` tag triggers release CI. CI downloads the selected published
-workload manifest from `WORKLOAD_MANIFEST_URL` and compares it byte for byte
-with [the repository pin](release/workload-release.json). Asset generation also
-requires the firmware to serve the manifest's API. The installer script checks
+A pushed `v*` tag triggers release CI. CI builds the assets from
+[the repository pin](release/workload-release.json) and does not download the
+published workload manifest; the pin is compared with it by hand when it is
+replaced. Asset generation requires the firmware to serve the manifest's API. The installer script checks
 the stamped digests of the binary and the same manifest before executing.
 See [release preparation](release/README.md).
 
