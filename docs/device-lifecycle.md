@@ -148,9 +148,12 @@ none -> manufactured -> enrolled -> decommissioned
 ### 7. Decommissioning
 
 - **Actor:** the owner.
-- **Command:** `sudo agent-firmware decommission --confirm`. The verified
-  release bootstrap accepts `--decommission --confirm` for earlier
-  installations and for retries after the installed binary was removed.
+- **Command:** `sudo agent-firmware decommission --confirm`. If the binary was
+  removed during an interrupted cleanup, resume with
+  `sudo sh agent-firmware-install.sh --decommission --confirm` and the same
+  data deletion flag as the original invocation. To clear an earlier
+  installation for reinstalling, run
+  `sudo sh agent-firmware-install.sh --decommission --confirm --delete-data`.
 - **Actions:** attempt deregistration of the current enrollment, then remove
   operational keys, enrollment volumes, root secret, IDevID and firmware.
   Remove unused workload images by digest when the release is readable.

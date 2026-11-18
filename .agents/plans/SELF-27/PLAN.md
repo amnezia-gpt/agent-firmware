@@ -8,6 +8,8 @@
 
 - [x] Reuse the volume deletion path for full teardown, including hosts without firmware state. Exercise bootstrap forwarding and legacy cleanup without a readable manifest.
 - [x] Run focused tests, the firmware suite and applicable bootstrap checks.
+- [x] Give complete recovery commands in the legacy and retained-volume hints.
+  Cover both errors and the offline removal help in the CLI tests.
 
 ## Status
 

@@ -9,8 +9,8 @@ container. The release check compares the pinned manifest with the exact
 published bytes and verifies the API and host platform before installation.
 
 Run `agent-firmware help` for the command list, or
-`agent-firmware help <command>` for flags and effects. The release bootstrap
-also accepts `--help`.
+`agent-firmware help <command>` for flags and effects. The
+`agent-firmware-install.sh` script also accepts `--help`.
 
 With Go 1.27.4, run:
 
@@ -118,13 +118,13 @@ Installation has three responsibilities with one owner each:
 - **The workload** owns OAuth registration, code redemption, tokens and backend
   connections. It runs inside the container safety envelope.
 
-After downloading and verifying the bootstrap, manufacture the device with:
+After downloading and verifying `agent-firmware-install.sh`, manufacture the device with:
 
 ```sh
 sudo sh agent-firmware-install.sh
 ```
 
-The bootstrap takes no arguments and closes standard input when invoking
+For installation, `agent-firmware-install.sh` takes no arguments and closes standard input when invoking
 `agent-firmware install --release workload-release.json`. It verifies the assets
 and checks release compatibility before it prepares Docker. The firmware creates
 the root secret during manufacture. It remains byte-identical across enrollment
@@ -143,7 +143,7 @@ a bounded time for the workload's outcome. A failed enrollment preserves the
 prepared resources for retry with the same issuer. An existing enrollment
 refuses a different issuer.
 
-`sudo agent-firmware update` downloads and runs the latest bootstrap without
+`sudo agent-firmware update` downloads and runs the latest `agent-firmware-install.sh` without
 arguments. The device release updates independently of the enrollment. The
 installer locks the lifecycle under `/run/agent-firmware-install` and journals
 the previous binary pointer, unit and device record. An installation failure
@@ -173,19 +173,18 @@ subsequent install creates a new IDevID. Both removal commands report domain
 deregistration separately from local completion. Repeat an interrupted command
 with the same flags. Unclassified firmware volumes also stay by default.
 
-For an earlier installation that returns `legacy_state_layout`, or after the
-installed binary is gone, use the bootstrap from a release that supports
-decommissioning:
+If installation reports `legacy_state_layout` or `retained_firmware_volumes`,
+the following commands erase the firmware and its local data on this host.
+This cannot be undone. Download the script first if it is missing:
 
 ```sh
-sudo sh agent-firmware-install.sh --decommission --confirm
+curl -fsSLo agent-firmware-install.sh https://github.com/amnezia-gpt/agent-firmware/releases/latest/download/agent-firmware-install.sh
+sudo sh agent-firmware-install.sh --decommission --confirm --delete-data
 ```
 
-Earlier installations report `deregistration: "not_attempted"`. Remove their
-device from the account separately. Their unclassified volumes cannot be
-attached to the current layout. If you intend to erase those volumes before
-reinstalling, add `--delete-data` to the bootstrap command. This also works
-after firmware has been removed.
+Then run your original installation command again, unchanged. Cleanup of an
+earlier installation reports `deregistration: "not_attempted"`. Remove its
+device from the account separately.
 
 The firmware never drops, renames or reclasses retained user data as part of
 an update. Host administrators are responsible for any deletion performed

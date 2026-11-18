@@ -40,6 +40,47 @@ the same domain attaches it.
   `user-data` volumes are accepted and left untouched.
 - The hint printed for an earlier installation names the flags that fit its outcome.
 
+## Review Finding: operator hints (owner, 2026-11-18)
+
+Seen on a real host. The operator ran the documented one-line installation and got:
+
+```text
+Earlier installation found. To remove the firmware and retain its volumes, run the release bootstrap with
+--decommission --confirm. Add --delete-data to erase the volumes before reinstalling.
+```
+
+The operator holds only the installation command. "Release bootstrap" names nothing they have, the message gives
+no command to copy, and the variant it puts first (retain the volumes) leads to a second refusal, because volumes
+of an earlier installation carry no class and block `install`.
+
+Rule for every message that asks the operator to act: it contains the complete commands to copy, in the order
+to run them, and only a path that ends in a working device. No term for the script other than its file name.
+
+- [x] Earlier installation (v0.1.x and v0.2.0 state), exact text on standard error before the JSON error:
+
+  ```text
+  agent-firmware: An earlier firmware installation is on this host. It cannot be updated in place.
+  agent-firmware: Run this command. It deletes the earlier installation and its data on this
+  agent-firmware: host; this cannot be undone:
+  agent-firmware:   sudo sh agent-firmware-install.sh --decommission --confirm --delete-data
+  agent-firmware: Then run your original installation command again, unchanged.
+  agent-firmware: If agent-firmware-install.sh is not in this directory, download it first:
+  agent-firmware:   curl -fsSLo agent-firmware-install.sh <the release URL the update command uses>
+  ```
+
+  The operator copies one command and repeats the command they already have. They never compose or edit a
+  command: the original installation line installs again and enrolls with the same, still unused code.
+
+- [x] Leftover enrollment or unclassified volumes at `install` (`retained_firmware_volumes`): the same form, with
+  the one command `sudo sh agent-firmware-install.sh --decommission --confirm --delete-data`, the statement
+  that it deletes the firmware volumes on this host, and "Then run your original installation command again,
+  unchanged."
+- [x] The retain variant of decommissioning an earlier installation is described in `help decommission` only,
+  with the note that such volumes cannot be attached and block a later `install`.
+- [x] The words "release bootstrap" do not appear in any message or help text shown to an operator; the script
+  is called `agent-firmware-install.sh`.
+- [x] A test asserts the exact hint text for both cases.
+
 ## Not In Scope
 
 - A command that deletes kept data without decommissioning (owner, 2026-11-18).
@@ -66,6 +107,10 @@ the same domain attaches it.
 Command and fixture engine tests cover schema 3 cleanup without a valid manifest, retained-data
 reporting, deletion intent on retry, global purge after firmware removal and manufacture with retained
 data. The isolated Ubuntu bootstrap harness verifies default and explicit purge dispatch.
+
+Exact CLI tests cover the recovery hints for v0.1.x, v0.2.0 and retained firmware
+volumes. The hints share the installation script URL used by `update`. Help
+distinguishes retaining older volumes from the cleanup that permits reinstalling.
 
 ## Next Action
 

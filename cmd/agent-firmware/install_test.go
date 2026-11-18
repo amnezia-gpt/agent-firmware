@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -156,16 +157,68 @@ func TestReleaseGateRejectsUnavailableTransportBeforeDiscovery(t *testing.T) {
 			t.Fatalf("release gate: %d %q %q", code, &out, &stderr)
 		}
 	}
-	if err := os.Mkdir(defaultStateDir, 0700); err != nil {
+	oldDevice, err := json.Marshal(map[string]any{
+		"schema_version": 2, "generation": "legacy",
+		"workload_release":   []byte(`{"schema_version":3}`),
+		"root_secret_sha256": "obsolete", "idevid_key": "obsolete",
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(defaultStateDir, host.LegacyState), []byte("old configuration"), 0600); err != nil {
-		t.Fatal(err)
+	const want = `agent-firmware: An earlier firmware installation is on this host. It cannot be updated in place.
+agent-firmware: Run this command. It deletes the earlier installation and its data on this
+agent-firmware: host; this cannot be undone:
+agent-firmware:   sudo sh agent-firmware-install.sh --decommission --confirm --delete-data
+agent-firmware: Then run your original installation command again, unchanged.
+agent-firmware: If agent-firmware-install.sh is not in this directory, download it first:
+agent-firmware:   curl -fsSLo agent-firmware-install.sh https://github.com/amnezia-gpt/agent-firmware/releases/latest/download/agent-firmware-install.sh
+{"error_code":"legacy_state_layout"}
+`
+	for _, layout := range []struct {
+		name, file string
+		record     []byte
+	}{
+		{"v0.1.x", host.LegacyState, []byte("old configuration")},
+		{"v0.2.0", host.DeviceState, oldDevice},
+	} {
+		t.Run(layout.name, func(t *testing.T) {
+			defaultStateDir = filepath.Join(t.TempDir(), "state")
+			if err := os.Mkdir(defaultStateDir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(defaultStateDir, layout.file), layout.record, 0600); err != nil {
+				t.Fatal(err)
+			}
+			var out, stderr bytes.Buffer
+			if code := run([]string{"install", "--release", manifestFixture}, unreadableStdin{t}, &out, &stderr); code != 1 ||
+				out.Len() != 0 || stderr.String() != want {
+				t.Fatalf("legacy install: %d %q %q", code, &out, &stderr)
+			}
+		})
 	}
+}
+
+func TestInstallRetainedVolumeRecoveryHint(t *testing.T) {
+	enableTestRelease(t)
+	beforeDir, beforeReady, beforePlace := defaultStateDir, hostReady, place
+	t.Cleanup(func() { defaultStateDir, hostReady, place = beforeDir, beforeReady, beforePlace })
+	defaultStateDir = filepath.Join(t.TempDir(), "state")
+	hostReady = func() string { return "" }
+	place = func(context.Context, *configuration.Device, func(string)) error {
+		return configuration.ErrRetainedVolumes
+	}
+	const want = `agent-firmware: Enrollment or unclassified firmware volumes are still on this host.
+agent-firmware: Run this command. It deletes the firmware volumes on this host;
+agent-firmware: this cannot be undone:
+agent-firmware:   sudo sh agent-firmware-install.sh --decommission --confirm --delete-data
+agent-firmware: Then run your original installation command again, unchanged.
+agent-firmware: If agent-firmware-install.sh is not in this directory, download it first:
+agent-firmware:   curl -fsSLo agent-firmware-install.sh https://github.com/amnezia-gpt/agent-firmware/releases/latest/download/agent-firmware-install.sh
+{"error_code":"retained_firmware_volumes"}
+`
 	var out, stderr bytes.Buffer
 	if code := run([]string{"install", "--release", manifestFixture}, unreadableStdin{t}, &out, &stderr); code != 1 ||
-		!strings.Contains(stderr.String(), "--decommission --confirm") ||
-		!strings.HasSuffix(stderr.String(), "{\"error_code\":\"legacy_state_layout\"}\n") {
-		t.Fatalf("legacy install: %d %q", code, &stderr)
+		out.Len() != 0 || stderr.String() != want {
+		t.Fatalf("retained volumes: %d %q %q", code, &out, &stderr)
 	}
 }

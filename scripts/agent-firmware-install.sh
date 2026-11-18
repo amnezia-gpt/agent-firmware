@@ -26,11 +26,10 @@ update an installed one. The firmware then does everything else:
   agent-firmware help
 
 --decommission --confirm
-    Remove the device and the firmware from this host, including an earlier
-    installation that the current firmware cannot update. User data is kept.
+    Remove the device and the firmware from this host. User data is kept.
 --decommission --confirm --delete-data
-    Also remove the user data of every domain on this host. This cannot be
-    undone.
+    Also remove the user data of every domain on this host. Use this form to
+    clear an earlier installation before reinstalling. This cannot be undone.
 HELP
   return
  fi

@@ -182,15 +182,26 @@ func respond(stdout, stderr io.Writer, value any) int {
 	return 0
 }
 
+const reinstallInstructions = `agent-firmware:   sudo sh agent-firmware-install.sh --decommission --confirm --delete-data
+agent-firmware: Then run your original installation command again, unchanged.
+agent-firmware: If agent-firmware-install.sh is not in this directory, download it first:
+agent-firmware:   curl -fsSLo agent-firmware-install.sh ` + updateScriptURL + "\n"
+
 func report(stderr io.Writer, code string, exit int) int {
 	if writer, ok := stderr.(commandDiagnostics); ok && exit == 2 {
 		_, _ = io.WriteString(stderr, writer.hint())
 	}
 	switch code {
 	case string(configuration.ErrLegacy):
-		_, _ = io.WriteString(stderr, "agent-firmware: Earlier installation found. To remove the firmware and retain its volumes, run the release bootstrap with --decommission --confirm. Add --delete-data to erase the volumes before reinstalling.\n")
+		_, _ = io.WriteString(stderr, `agent-firmware: An earlier firmware installation is on this host. It cannot be updated in place.
+agent-firmware: Run this command. It deletes the earlier installation and its data on this
+agent-firmware: host; this cannot be undone:
+`+reinstallInstructions)
 	case string(configuration.ErrRetainedVolumes):
-		_, _ = io.WriteString(stderr, "agent-firmware: Enrollment or unclassified volumes remain. Run decommission --confirm --delete-data through the release bootstrap to erase firmware volumes before installing.\n")
+		_, _ = io.WriteString(stderr, `agent-firmware: Enrollment or unclassified firmware volumes are still on this host.
+agent-firmware: Run this command. It deletes the firmware volumes on this host;
+agent-firmware: this cannot be undone:
+`+reinstallInstructions)
 	}
 	message := "{\"error_code\":\"" + code + "\"}\n"
 	if n, err := io.WriteString(stderr, message); err != nil || n != len(message) {

@@ -86,9 +86,9 @@ may be adjusted to the implemented behavior, never beyond it.
 | `install` | `install --release <file>` | creates the root secret and the device identity, pulls the release's images, installs and starts the service | an existing device identity on a repeated run; kept user data | root; Docker; a host without an earlier installation |
 | `enroll` | `enroll --issuer <https-url> [--enrollment-code-stdin \| --enrollment-code-file <file>]` | pins the domain's profile, creates the enrollment's keys, network, volumes and containers, waits for the workload to report the enrollment | the device identity; attaches user data kept for the same domain | root; an installed device that is not enrolled |
 | `status` | `status [--state-dir <directory>]` | nothing | n/a | root (reads protected state) |
-| `update` | `update` | downloads and runs the latest release bootstrap; replaces the firmware and the pinned workload release; rolls back on failure | device identity, enrollment, all volumes | root; an installed device |
+| `update` | `update` | downloads and runs the latest `agent-firmware-install.sh`; replaces the firmware and the pinned workload release; rolls back on failure | device identity, enrollment, all volumes | root; an installed device |
 | `unenroll` | `unenroll --confirm [--delete-data]` | asks the domain to deregister, then removes the enrollment's containers, network, enrollment volumes, operational keys and records. With `--delete-data` also this domain's user data | the device identity; without `--delete-data`, this domain's user data; other domains' data always | root; `--confirm`, without it only the description is printed |
-| `decommission` | `decommission --confirm [--delete-data]` | everything `unenroll` removes, then the root secret, the device identity, the device record, the service and the installed firmware. With `--delete-data` also the user data of every domain on this host | without `--delete-data`, user data; Docker | root; `--confirm`. On a host where this binary is not installed, run it through the release bootstrap: `sh agent-firmware-install.sh --decommission --confirm` |
+| `decommission` | `decommission --confirm [--delete-data]` | everything `unenroll` removes, then the root secret, the device identity, the device record, the service and the installed firmware. With `--delete-data` also the user data of every domain on this host | without `--delete-data`, user data; Docker | root; `--confirm`. When the binary is unavailable, run `sudo sh agent-firmware-install.sh --decommission --confirm` |
 | `discover-profile` | `discover-profile --issuer <https-url>` | nothing; prints the profile | n/a | network access to the issuer |
 | `validate-release` | `validate-release --release <file>` | nothing | n/a | none |
 | `validate-profile` | `validate-profile < <file>` | nothing | n/a | none |
@@ -112,17 +112,21 @@ update an installed one. The firmware then does everything else:
   agent-firmware help
 
 --decommission --confirm
-    Remove the device and the firmware from this host, including an earlier
-    installation that the current firmware cannot update. User data is kept.
+    Remove the device and the firmware from this host. User data is kept.
 --decommission --confirm --delete-data
-    Also remove the user data of every domain on this host. This cannot be
-    undone.
+    Also remove the user data of every domain on this host. Use this form to
+    clear an earlier installation before reinstalling. This cannot be undone.
 ```
 
 ### README
 
 README gains one paragraph that points to `agent-firmware help`. It keeps the narrative and is not turned into a
 flag reference.
+
+## Review Finding (owner, 2026-11-18)
+
+- [x] Help text never says "release bootstrap". Where the script is meant, it gives the file name and the full
+  command, as required for hints in [SELF-27](../SELF-27/ISSUE.md).
 
 ## Not In Scope
 
