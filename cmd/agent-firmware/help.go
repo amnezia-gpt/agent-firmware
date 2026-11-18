@@ -40,21 +40,28 @@ Example: sudo agent-firmware install --release workload-release.json
 		"Join a domain and start the workloads", `Join a domain and wait for the workload to report its enrollment. Read
 the code from standard input or a file. The code itself stays out of arguments.
 
+For an existing binding, the firmware checks whether the operational
+identity is valid. With a lost identity, a fresh code for the same domain
+renews the enrollment and keeps the keys, containers, network and volumes.
+A working identity returns already_enrolled. If the workload cannot report
+its state, the command returns workload_unavailable. Both leave the code unused.
+
 Changes: Pins the domain profile and creates operational keys, the workload
-network, volumes and containers.
+network, volumes and containers on the first enrollment.
 Keeps: The IDevID and retained user data of the same domain.
 Requires: Root and an installed device eligible to join the domain.
 Example: sudo agent-firmware enroll --issuer https://auth.example \
            --enrollment-code-file enrollment-code
 `, map[string]bool{"--issuer": true, "--enrollment-code-stdin": false, "--enrollment-code-file": true}, runEnroll},
-	{"status", lifecycleCommands, "status [--state-dir <directory>]",
+	{"status", lifecycleCommands, "status [--json] [--state-dir <directory>]",
 		"Show the device, its enrollment and kept user data", `Show device and enrollment state and list kept user data from the local engine.
+Use --json to print the versioned device state document.
 Use --state-dir to select the firmware state directory to inspect.
 
 Changes: None.
 Requires: Root to read protected state.
 Example: sudo agent-firmware status
-`, map[string]bool{"--state-dir": true}, stateCommand("status")},
+`, map[string]bool{"--state-dir": true, "--json": false}, stateCommand("status")},
 	{"update", lifecycleCommands, "update",
 		"Install the latest firmware release", `Download and run agent-firmware-install.sh from the latest firmware release.
 

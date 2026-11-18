@@ -37,6 +37,14 @@ func removalRuntime(layout hostplatform.Layout, installation string, legacy bool
 	var owned []string
 	for _, entry := range entries {
 		name := entry.Name()
+		if !legacy && (name == hostplatform.RuntimeStatus || name == hostplatform.RuntimeStatus+".new") {
+			info, err := root.Lstat(name)
+			if err != nil || !owner.Regular(info, 0600, false) {
+				return nil, ErrConflict
+			}
+			owned = append(owned, filepath.Join(layout.Runtime, name))
+			continue
+		}
 		if !runtimeInstallation.MatchString(name) || legacy && installation != "" && name != installation {
 			return nil, ErrConflict
 		}

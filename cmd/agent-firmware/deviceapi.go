@@ -43,9 +43,12 @@ type apiManager struct {
 	done              chan struct{}
 	linkEvents        chan deviceapi.LinkEvent
 	updateLinkStatus  func(deviceapi.LinkEvent)
+	observeIdentity   func(configuration.IdentityCondition) error
 	droppedLinkEvents atomic.Uint64
 	reportedLinkDrops uint64
 	link              deviceapi.LinkRunner
+	phase             atomic.Pointer[string]
+	latestLink        atomic.Pointer[deviceapi.LinkEvent]
 	dial              dockerengine.DialCommand
 	status            dockerengine.StatusCommand
 	refreshGeneration string
@@ -117,6 +120,7 @@ func (m *apiManager) initLinkQueue() {
 }
 
 func (m *apiManager) recordLink(event deviceapi.LinkEvent) {
+	m.latestLink.Store(&event)
 	if m.updateLinkStatus != nil {
 		m.updateLinkStatus(event)
 	}
@@ -126,6 +130,20 @@ func (m *apiManager) recordLink(event deviceapi.LinkEvent) {
 	default:
 		m.droppedLinkEvents.Add(1)
 	}
+}
+
+func (m *apiManager) currentPhase() string {
+	if phase := m.phase.Load(); phase != nil {
+		return *phase
+	}
+	return ""
+}
+
+func (m *apiManager) currentLink() deviceapi.LinkEvent {
+	if event := m.latestLink.Load(); event != nil {
+		return *event
+	}
+	return deviceapi.LinkEvent{State: "inactive"}
 }
 
 func (m *apiManager) drain(out io.Writer) {
@@ -160,7 +178,7 @@ func (m *apiManager) drainLink(out io.Writer) {
 
 // Keep sd_notify on a separate worker. systemctl displays the latest line,
 // so a full queue can replace its oldest status without delaying the link.
-func startLinkStatus(notifier service.Notifier) (func(deviceapi.LinkEvent), func()) {
+func startLinkStatus(notifier service.Notifier, phase func() string) (func(deviceapi.LinkEvent), func()) {
 	if notifier.Socket == "" {
 		return nil, func() {}
 	}
@@ -170,6 +188,9 @@ func startLinkStatus(notifier service.Notifier) (func(deviceapi.LinkEvent), func
 		defer close(done)
 		for event := range pending {
 			line := fmt.Sprintf("Device API link %s (reconnects %d)", event.State, event.ReconnectCount)
+			if state := phase(); state != "" {
+				line = state + " | " + line
+			}
 			_ = notifier.Status(line)
 		}
 	}()
@@ -183,7 +204,10 @@ func startLinkStatus(notifier service.Notifier) (func(deviceapi.LinkEvent), func
 		case <-pending:
 		default:
 		}
-		pending <- event
+		select {
+		case pending <- event:
+		default:
+		}
 	}
 	publish(deviceapi.LinkEvent{State: "inactive"})
 	return publish, func() {

@@ -23,6 +23,7 @@ type host struct {
 	fragment           string
 	fail               map[string]bool
 	writeEngineAddress bool
+	onStart            func()
 }
 
 func newHost(t *testing.T) *host {
@@ -75,6 +76,9 @@ func (h *host) do(_ context.Context, verb string) error {
 	}
 	switch verb {
 	case "start":
+		if h.onStart != nil {
+			h.onStart()
+		}
 		// A service that starts and dies at once: the first start of a run leaves it inactive.
 		h.active = !h.fail["dies"]
 		delete(h.fail, "dies")
@@ -245,6 +249,38 @@ func TestFailedUpgradeReturnsThePreviousInstallation(t *testing.T) {
 			h.noTransaction()
 		})
 	}
+}
+
+func TestFailedUpgradeRestoresEnrollmentRecordBeforeStartingPreviousService(t *testing.T) {
+	h := newHost(t)
+	if err := h.install("previous binary"); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(h.layout.State, hostplatform.EnrollmentDir)
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, hostplatform.EnrollmentRecord)
+	const previous = `{"schema_version":2}`
+	if err := write(path, []byte(previous), 0600); err != nil {
+		t.Fatal(err)
+	}
+	starts := 0
+	h.fail["dies"] = true
+	h.onStart = func() {
+		starts++
+		if starts == 1 {
+			if err := replace(path, []byte(`{"schema_version":3}`), 0600); err != nil {
+				t.Fatal(err)
+			}
+		} else if h.read(path) != previous {
+			t.Fatal("old binary started with a migrated enrollment record")
+		}
+	}
+	if err := h.install("candidate binary"); err != ErrStart || starts != 2 || !h.active || h.current() != "previous binary" {
+		t.Fatalf("previous service was not restored: %v", err)
+	}
+	h.noTransaction()
 }
 
 func TestInterruptedTransactionIsRecoveredByTheNextRun(t *testing.T) {

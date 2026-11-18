@@ -81,9 +81,10 @@ func openFile(root *os.Root, name string, flags int) (*os.File, error) {
 }
 
 type Snapshot struct {
-	Device     *Device
-	Enrollment *Enrollment
-	Removal    *Removal
+	Device          *Device
+	Enrollment      *Enrollment
+	Removal         *Removal
+	Decommissioning bool
 }
 
 func (s Snapshot) Identity() *deviceidentity.Access {

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/amnezia-gpt/agent-firmware/internal/configuration"
 	"github.com/amnezia-gpt/agent-firmware/internal/dockerengine"
@@ -105,7 +106,7 @@ func TestUnenrollResumesLocalRemovalWithoutDomain(t *testing.T) {
 		t.Fatalf("wrong resume: outcome=%+v, calls=%+v, err=%v", outcome, fake, err)
 	}
 	after, err := store.Snapshot()
-	if err != nil || lifecycle(after) != manufactured || after.Removal != nil || after.Enrollment != nil {
+	if phase, _ := phaseOf(after, time.Now()); err != nil || phase != "manufactured" || after.Removal != nil || after.Enrollment != nil {
 		t.Fatalf("device did not return to manufactured state: %v", err)
 	}
 	if after.Device.Thumbprint() != before.Device.Thumbprint() ||

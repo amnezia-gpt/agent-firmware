@@ -81,6 +81,8 @@ See [PLAN.md](PLAN.md) for exact checks and limits.
 - `enrolled` is recorded once and the status command is not run again afterwards. A device that the domain
   removed on its side keeps reporting `enrolled` until `unenroll` ([SELF-20](../SELF-20/ISSUE.md)), which owns
   the decision whether the service should notice it.
+  Decided on 2026-11-18 after it failed on a real host: the service keeps observing, and the installation
+  command restores a lost identity ([SELF-30](../SELF-30/ISSUE.md)).
 - `status` reports a failed attempt as `enrollment pending`; the failure itself is only in the exit code of the
   `enroll` that observed it.
 

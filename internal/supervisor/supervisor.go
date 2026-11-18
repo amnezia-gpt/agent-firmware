@@ -62,7 +62,7 @@ func Run(ctx context.Context, cycle func(context.Context) (bool, error), emit fu
 			event.State = "busy"
 		case err != nil:
 			event.State = "failed"
-			event.ErrorCode = code(err)
+			event.ErrorCode = ErrorCode(err)
 		}
 		if err := output(event); err != nil {
 			return err
@@ -76,7 +76,7 @@ func Run(ctx context.Context, cycle func(context.Context) (bool, error), emit fu
 		}
 	}
 }
-func code(err error) string {
+func ErrorCode(err error) string {
 	for _, allowed := range []error{workloadrelease.ErrDeviceAPI, workloadrelease.ErrPlatform, backendprofile.ErrScopeMissing, backendprofile.ErrScopeAmbiguous, configuration.ErrInvalid, configuration.ErrLegacy, configuration.ErrUnsafe, configuration.ErrRead, configuration.ErrWrite, configuration.ErrCorrupt, configuration.ErrUncertain, configuration.ErrIdentityConflict, configuration.ErrRootSecret, deviceapi.ErrKeystore, configuration.ErrPending, workload.ErrEngine, workload.ErrConflict, workload.ErrHealth, workload.ErrTimeout, workload.ErrCanceled, workload.ErrDeadline, workload.ErrJournal, workload.ErrRecovery, workload.ErrCleanup} {
 		if errors.Is(err, allowed) {
 			return allowed.Error()

@@ -1,12 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -20,10 +20,19 @@ import (
 )
 
 const (
-	errEnrollmentFailed      configuration.Error = "enrollment_failed"
-	errEnrollmentTimeout     configuration.Error = "enrollment_timeout"
-	errEnrollmentInterrupted configuration.Error = "enrollment_interrupted"
+	errEnrollmentFailed       configuration.Error = "enrollment_failed"
+	errEnrollmentTimeout      configuration.Error = "enrollment_timeout"
+	errEnrollmentInterrupted  configuration.Error = "enrollment_interrupted"
+	errAlreadyEnrolled        configuration.Error = "already_enrolled"
+	errEnrollmentCodeRequired configuration.Error = "enrollment_code_required"
+	errWorkloadUnavailable    configuration.Error = "workload_unavailable"
 )
+
+type enrollmentResult struct {
+	State      string `json:"state"`
+	Enrollment string `json:"enrollment"`
+	UserData   string `json:"user_data"`
+}
 
 type codeStore interface {
 	Put(string) error
@@ -67,7 +76,7 @@ func runEnroll(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if os.Geteuid() != 0 {
 		return report(stderr, "root_required", 1)
 	}
-	var code string
+	var code []byte
 	if source != "" {
 		if codePath != "" {
 			file, err := openInput(codePath)
@@ -78,13 +87,12 @@ func runEnroll(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			input = file
 		}
 		data, err := io.ReadAll(io.LimitReader(input, deviceapi.MaxEnrollmentCode+2))
+		defer clear(data)
 		if err != nil {
-			clear(data)
 			return report(stderr, "input_read_failed", 1)
 		}
-		code = strings.TrimSuffix(string(data), "\n")
-		clear(data)
-		if !deviceapi.ValidEnrollmentCode(code) {
+		code = bytes.TrimSuffix(data, []byte{'\n'})
+		if !deviceapi.ValidEnrollmentCode(string(code)) {
 			return report(stderr, string(deviceapi.ErrEnrollmentCode), 1)
 		}
 	}
@@ -95,49 +103,53 @@ func runEnroll(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	store := configuration.Store{Path: defaultStateDir}
 	// The wait can take minutes; without these lines the terminal looks hung.
 	progress := func(message string) { _, _ = io.WriteString(stderr, "agent-firmware: "+message+"\n") }
-	userData, err := enrollDevice(ctx, store, hostLayout, issuer, code, time.Second, progress)
+	result, err := enrollDevice(ctx, store, hostLayout, issuer, code, time.Second, progress)
 	if err != nil {
 		return report(stderr, err.Error(), 1)
 	}
-	return respond(stdout, stderr, struct {
-		State    string `json:"state"`
-		UserData string `json:"user_data"`
-	}{"enrolled", userData})
+	return respond(stdout, stderr, result)
 }
 
 // enrollmentHeartbeat is how often the wait reports that it is still running.
 const enrollmentHeartbeat = 15 * time.Second
 
-func enrollDevice(ctx context.Context, store configuration.Store, layout host.Layout, issuer, code string, interval time.Duration, progress func(string)) (userData string, result error) {
+func enrollDevice(ctx context.Context, store configuration.Store, layout host.Layout, issuer string, code []byte, interval time.Duration, progress func(string)) (reply enrollmentResult, result error) {
+	defer clear(code)
 	unlock, err := installer.Lock(layout)
 	if err != nil {
-		return "", err
+		return reply, err
 	}
 	defer unlock()
 	snapshot, err := store.Snapshot()
 	if err != nil {
-		return "", err
+		return reply, err
 	}
 	if snapshot.Removal != nil {
-		return "", configuration.ErrRemovalPending
+		return reply, configuration.ErrRemovalPending
 	}
 	if snap := snapshot.Enrollment; snap != nil {
 		if snap.Profile.AuthIssuer != issuer {
-			return "", configuration.ErrIdentityConflict
-		}
-		if snap.Outcome == configuration.Enrolled {
-			return enrollmentDataResult(snap.AttachedUserData), nil
+			return reply, configuration.ErrIdentityConflict
 		}
 	}
 	if err := checkDeployableRelease(snapshot.Device.Release()); err != nil {
-		return "", err
+		return reply, err
 	}
-	if snapshot.Enrollment == nil {
+	mode := "created"
+	var input *configuration.Input
+	prepareCtx := ctx
+	if snapshot.Enrollment != nil {
+		mode = "renewed"
+		var cancel context.CancelFunc
+		prepareCtx, cancel = context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		progress("Checking the device's current enrollment")
+	} else {
 		progress("Reading the domain configuration")
-	}
-	input, err := enrollmentInput(ctx, snapshot, issuer)
-	if err != nil {
-		return "", err
+		input, err = enrollmentInput(ctx, snapshot, issuer)
+		if err != nil {
+			return reply, err
+		}
 	}
 	var codes codeStore
 	defer func() {
@@ -152,40 +164,54 @@ func enrollDevice(ctx context.Context, store configuration.Store, layout host.La
 		if err != nil {
 			return err
 		}
-		if current.Enrollment != nil {
-			if current.Enrollment.Profile.AuthIssuer != issuer {
+		existing := current.Enrollment
+		if existing != nil {
+			if existing.Profile.AuthIssuer != issuer {
 				return configuration.ErrIdentityConflict
 			}
-			if current.Enrollment.Outcome == configuration.Enrolled {
+			if err := checkRenewal(prepareCtx, session, current, layout, len(code) != 0); err != nil {
+				if prepareCtx.Err() != nil {
+					return enrollmentPreparationError(ctx)
+				}
+				return err
+			}
+			if len(code) == 0 {
 				return nil
 			}
+			// The probe may have changed the condition. Preserve that record's
+			// timestamps and the original binding when marking the new attempt.
+			current, err = session.Snapshot()
+			if err != nil {
+				return err
+			}
+			existing = current.Enrollment
 		}
-		check, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		attached, err := checkWorkloadVolumes(check, session, input, current.Enrollment == nil)
-		if err != nil {
-			return err
+		var attached bool
+		if existing == nil {
+			check, cancel := context.WithTimeout(ctx, 30*time.Second)
+			attached, err = checkWorkloadVolumes(check, session, input, true)
+			cancel()
+			if err != nil {
+				return err
+			}
 		}
-		if ctx.Err() != nil {
-			return enrollmentWaitError(ctx)
+		if prepareCtx.Err() != nil {
+			return enrollmentPreparationError(ctx)
 		}
-		if code != "" {
+		if len(code) != 0 {
 			next, err := openCodes(layout, workload.EnrollmentID(issuer), true)
 			if err != nil {
 				return err
 			}
-			if err := next.Put(code); err != nil {
+			if err := next.Put(string(code)); err != nil {
 				return err
 			}
 			codes = next
 		}
-		if err := session.BeginEnrollment(input, attached); err != nil {
-			return err
+		if existing == nil {
+			return session.BeginEnrollment(input, attached)
 		}
-		if current.Enrollment != nil && code != "" {
-			return session.SetOutcome(issuer, configuration.Pending, true)
-		}
-		return nil
+		return session.SetIdentity(existing, configuration.IdentityObtaining, time.Now(), false, true)
 	}
 	progress("Preparing the enrollment")
 	ticker := time.NewTicker(interval)
@@ -196,37 +222,42 @@ func enrollDevice(ctx context.Context, store configuration.Store, layout host.La
 			break
 		}
 		if !errors.Is(err, configuration.ErrBusy) {
-			return "", err
+			return reply, err
 		}
 		if !busy {
 			busy = true
 			progress("Waiting for the firmware service to finish its current step")
 		}
 		select {
-		case <-ctx.Done():
-			return "", enrollmentWaitError(ctx)
+		case <-prepareCtx.Done():
+			return reply, enrollmentPreparationError(ctx)
 		case <-ticker.C:
 		}
 	}
+	clear(code)
 
-	progress("Starting the workloads and waiting for the domain to confirm the enrollment")
+	if mode == "created" {
+		progress("Starting the workloads and waiting for the domain to confirm the enrollment")
+	} else {
+		progress("Waiting for the domain to confirm the renewed enrollment")
+	}
 	progress("This usually takes a few minutes. Do not interrupt")
 	started := time.Now()
 	reported := started
 	for {
 		observed, err := store.Snapshot()
 		if err != nil {
-			return "", err
+			return reply, err
 		}
 		if observed.Enrollment == nil || observed.Enrollment.Profile.AuthIssuer != issuer {
-			return "", configuration.ErrIdentityConflict
+			return reply, configuration.ErrIdentityConflict
 		}
-		switch observed.Enrollment.Outcome {
-		case configuration.Enrolled:
+		switch observed.Enrollment.Identity.Reason {
+		case configuration.IdentityConfirmed:
 			progress("The domain confirmed the enrollment")
-			return enrollmentDataResult(observed.Enrollment.AttachedUserData), nil
-		case configuration.Failed:
-			return "", errEnrollmentFailed
+			return enrollmentResult{"enrolled", mode, enrollmentDataResult(observed.Enrollment.AttachedUserData)}, nil
+		case configuration.IdentityRefused:
+			return reply, errEnrollmentFailed
 		}
 		if now := time.Now(); now.Sub(reported) >= enrollmentHeartbeat {
 			reported = now
@@ -234,10 +265,63 @@ func enrollDevice(ctx context.Context, store configuration.Store, layout host.La
 		}
 		select {
 		case <-ctx.Done():
-			return "", enrollmentWaitError(ctx)
+			return reply, enrollmentWaitError(ctx)
 		case <-ticker.C:
 		}
 	}
+}
+
+func enrollmentPreparationError(ctx context.Context) error {
+	if ctx.Err() != nil {
+		return enrollmentWaitError(ctx)
+	}
+	return errWorkloadUnavailable
+}
+
+func checkRenewal(ctx context.Context, session *configuration.Session, snapshot configuration.Snapshot, layout host.Layout, hasCode bool) error {
+	outcome, err := probeExistingEnrollment(ctx, session, snapshot)
+	if err != nil || ctx.Err() != nil {
+		return errWorkloadUnavailable
+	}
+	reason, err := recordEnrollmentProbe(session, snapshot.Enrollment, layout, outcome, time.Now())
+	if err != nil {
+		return err
+	}
+	switch reason {
+	case configuration.IdentityConfirmed:
+		return errAlreadyEnrolled
+	case configuration.IdentityObtaining:
+		return nil
+	case configuration.IdentityLost, configuration.IdentityRequired, configuration.IdentityRefused:
+		if !hasCode {
+			return errEnrollmentCodeRequired
+		}
+		return nil
+	default:
+		return errWorkloadUnavailable
+	}
+}
+
+var probeExistingEnrollment = func(ctx context.Context, session *configuration.Session, snapshot configuration.Snapshot) (dockerengine.EnrollmentOutcome, error) {
+	stack, err := workload.FromInput(snapshot.Enrollment.Input(snapshot.Device))
+	if err != nil {
+		return "", err
+	}
+	address, err := session.EngineAddress()
+	if err != nil {
+		return "", err
+	}
+	engine, err := dockerengine.New(address)
+	if err != nil {
+		return "", err
+	}
+	defer engine.Close()
+	target, err := engine.ClientTarget(ctx, stack)
+	if err != nil {
+		return "", err
+	}
+	var command dockerengine.StatusCommand
+	return command.Run(ctx, engine, target, stack.Client.EnrollmentStatus)
 }
 
 func enrollmentDataResult(attached bool) string {
@@ -248,9 +332,6 @@ func enrollmentDataResult(attached bool) string {
 }
 
 func enrollmentInput(ctx context.Context, snapshot configuration.Snapshot, issuer string) (*configuration.Input, error) {
-	if snapshot.Enrollment != nil {
-		return snapshot.Enrollment.Input(snapshot.Device), nil
-	}
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	raw, err := discover(ctx, issuer)
@@ -278,31 +359,54 @@ func enrollmentWaitError(ctx context.Context) error {
 }
 
 func observeEnrollment(session *configuration.Session, enrollment *configuration.Enrollment, result dockerengine.EnrollmentOutcome) error {
-	issuer := enrollment.Profile.AuthIssuer
-	if result == dockerengine.EnrollmentPending {
-		if enrollment.RetryWithCode {
-			return session.SetOutcome(issuer, configuration.Pending, false)
-		}
-		return nil
-	}
-	codes, err := openCodes(hostLayout, workload.EnrollmentID(issuer), false)
+	_, err := recordEnrollmentProbe(session, enrollment, hostLayout, result, time.Now())
+	return err
+}
+
+func recordEnrollmentProbe(session *configuration.Session, enrollment *configuration.Enrollment, layout host.Layout, result dockerengine.EnrollmentOutcome, now time.Time) (configuration.IdentityReason, error) {
+	codes, err := openCodes(layout, workload.EnrollmentID(enrollment.Profile.AuthIssuer), false)
 	if err != nil {
-		return err
+		return "", err
 	}
-	if result == dockerengine.EnrollmentFailed && enrollment.RetryWithCode {
-		// The workload may still report the previous attempt until it polls
-		// the new code. A pending result or consumption makes failure fresh.
-		held, err := codes.HasCode()
-		if err != nil || held {
-			return err
+	held, err := codes.HasCode()
+	if err != nil {
+		return "", err
+	}
+	reason := enrollmentProbeReason(enrollment, result, held)
+	if reason == "" {
+		return "", nil
+	}
+	if held && (reason == configuration.IdentityConfirmed || reason == configuration.IdentityRefused) {
+		if err := codes.Delete(); err != nil {
+			return "", err
 		}
 	}
-	if err := codes.Delete(); err != nil {
-		return err
+	return reason, session.SetIdentity(enrollment, reason, now, true, false)
+}
+
+func enrollmentProbeReason(enrollment *configuration.Enrollment, result dockerengine.EnrollmentOutcome, held bool) configuration.IdentityReason {
+	switch result {
+	case dockerengine.EnrollmentComplete:
+		return configuration.IdentityConfirmed
+	case dockerengine.EnrollmentPending:
+		if held {
+			return configuration.IdentityObtaining
+		}
+	case dockerengine.EnrollmentFailed:
+		// A held replacement code may not have been seen yet. Wait for pending
+		// or consumption before accepting a refusal of that attempt.
+		if held && !enrollment.RetryWithCode || !held &&
+			(enrollment.Identity.Reason == configuration.IdentityObtaining || enrollment.Identity.Reason == configuration.IdentityRefused) {
+			return configuration.IdentityRefused
+		}
+	case dockerengine.EnrollmentAbsent:
+		if held {
+			return ""
+		}
+		if enrollment.Outcome == configuration.Enrolled {
+			return configuration.IdentityLost
+		}
+		return configuration.IdentityRequired
 	}
-	outcome := configuration.Failed
-	if result == dockerengine.EnrollmentComplete {
-		outcome = configuration.Enrolled
-	}
-	return session.SetOutcome(issuer, outcome, false)
+	return ""
 }

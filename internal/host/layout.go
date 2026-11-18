@@ -9,10 +9,12 @@ const (
 	LegacyState      = "accepted.json"
 	DeviceState      = "device.json"
 	EnrollmentDir    = "enrollment"
+	EnrollmentRecord = "profile.json"
 	EngineState      = "engine-address"
 	RootSecret       = "root-secret"
 	OperationJournal = "operation.json"
 	OperationLock    = "operation.lock"
+	RuntimeStatus    = "status.json"
 )
 
 type Layout struct {

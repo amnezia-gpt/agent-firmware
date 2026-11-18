@@ -70,7 +70,7 @@ func TestEveryHelpTopicAndFlagIsDispatched(t *testing.T) {
 	examples := map[string][][]string{
 		"install":          {{"--release", "manifest.json"}},
 		"enroll":           {{"--issuer", "https://auth.example", "--enrollment-code-stdin"}, {"--enrollment-code-file", "code", "--issuer", "https://auth.example"}},
-		"status":           {{}, {"--state-dir", "state"}},
+		"status":           {{}, {"--json", "--state-dir", "state"}},
 		"update":           {{}},
 		"unenroll":         {{"--confirm", "--delete-data"}},
 		"decommission":     {{"--confirm", "--delete-data"}},

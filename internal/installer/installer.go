@@ -211,6 +211,9 @@ func Install(ctx context.Context, request Request) (err error) {
 			return err
 		}
 	}
+	if err := r.backupEnrollment(); err != nil {
+		return err
+	}
 	if ctx.Err() != nil {
 		return ErrInterrupted
 	}
@@ -415,6 +418,24 @@ func (r *run) prepare(ctx context.Context) error {
 	return nil
 }
 
+// The candidate service can migrate the record before it signals readiness.
+// Save the old bytes after stopping its writer so rollback can start the old binary.
+func (r *run) backupEnrollment() error {
+	dir := filepath.Join(r.Layout.State, hostplatform.EnrollmentDir)
+	if !lexists(dir) {
+		return nil
+	}
+	path := filepath.Join(dir, hostplatform.EnrollmentRecord)
+	if !r.safeDir(dir, 0o700) || !r.safeFile(path, 0o600) {
+		return ErrConflict
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || replace(filepath.Join(r.transaction, "enrollment"), data, 0o600) != nil {
+		return ErrWrite
+	}
+	return nil
+}
+
 // recover returns the host to the state a prepared, uncommitted transaction
 // recorded. It never removes or rewrites firmware's own operation journal.
 func (r *run) recover() error {
@@ -483,6 +504,18 @@ func (r *run) recover() error {
 	}
 	if has("engine-absent") && r.removeNewEngineState() != nil {
 		return ErrRecovery
+	}
+	if has("enrollment") {
+		backup := filepath.Join(t, "enrollment")
+		dir := filepath.Join(l.State, hostplatform.EnrollmentDir)
+		path := filepath.Join(dir, hostplatform.EnrollmentRecord)
+		if !r.safeFile(backup, 0o600) || !r.safeDir(dir, 0o700) || !r.safeFile(path, 0o600) {
+			return ErrRecovery
+		}
+		data, err := os.ReadFile(backup)
+		if err != nil || replace(path, data, 0o600) != nil {
+			return ErrRecovery
+		}
 	}
 	if r.Services.Reload(ctx) != nil {
 		return ErrRecovery

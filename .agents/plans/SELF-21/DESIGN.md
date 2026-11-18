@@ -135,6 +135,7 @@ Run by exec in the client service, as that service's user, without a shell and w
 
 - `dial`: connects the in-container link socket to the standard streams (SELF-19).
 - `enrollment_status`: prints `{"state":"enrolled"|"pending"|"failed","reason":"<code>"}`.
+  SELF-31 adds `unenrolled` to the [control result schema](../SELF-24/enrollment-status.schema.json).
 - `deregister`: prints `{"state":"deregistered"|"failed","reason":"<code>"}`.
 
 One JSON object of at most 4 KiB on standard output, exit status 0. `reason` is optional, a bounded lowercase

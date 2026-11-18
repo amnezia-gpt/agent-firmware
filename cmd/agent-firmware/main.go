@@ -192,6 +192,12 @@ func report(stderr io.Writer, code string, exit int) int {
 		_, _ = io.WriteString(stderr, writer.hint())
 	}
 	switch code {
+	case string(errAlreadyEnrolled):
+		_, _ = io.WriteString(stderr, "agent-firmware: The device is enrolled and working. The code was not used.\n")
+	case string(errEnrollmentCodeRequired):
+		_, _ = io.WriteString(stderr, "agent-firmware: "+newEnrollmentCommand+"\n")
+	case string(errWorkloadUnavailable):
+		_, _ = io.WriteString(stderr, "agent-firmware: "+checkService+"\n")
 	case string(configuration.ErrLegacy):
 		_, _ = io.WriteString(stderr, `agent-firmware: An earlier firmware installation is on this host. It cannot be updated in place.
 agent-firmware: Run this command. It deletes the earlier installation and its data on this

@@ -30,6 +30,8 @@ what hardware gives.
 | Onboarding | Bootstrap tokens: Kubernetes TLS bootstrapping, AWS IoT provisioning by trusted user | The owner authorizes in advance and receives a short-lived one-time code; the device presents it and receives its operational identity. |
 | Key custody | TPM usage model, Azure IoT Edge security manager | The lowest layer holds private keys; upper layers ask it to sign or decrypt and never receive a key. |
 | Update | RFC 9019 | An image with a manifest, authenticity checked before use, recovery when an update fails. |
+| Loss of the operational identity | RFC 7030 (EST), OMA LwM2M, RFC 6749 | Renewal needs no person while the identity is valid. Once the domain refuses it, the device returns to enrollment with its permanent identity and a new permission of the owner, keeping everything else. |
+| State | Kubernetes conditions | Independent conditions, each true, false or unknown, with a reason and the time it was last observed. |
 | Lifecycle scope | NIST SP 1800-36 | Onboarding is one stage of a lifecycle that also covers operation, update, change of owner and decommissioning. |
 
 What we do not take:
@@ -66,7 +68,15 @@ What we do not take:
 none -> manufactured -> enrolled -> decommissioned
               ^             |
               +-------------+   (stage 6)
+
+within enrolled:   identity valid <-> identity lost
+                       (the domain stops accepting the LDevID; stage 3a restores it)
 ```
+
+`enrolled` means the device is bound to a domain. Whether the domain still
+accepts the device's LDevID is a second fact, decided by the server and only
+observed on the device. A device that lost its identity is still enrolled: the
+domain, the operational keys and the owner's data stay.
 
 ## Stages
 
@@ -113,8 +123,20 @@ none -> manufactured -> enrolled -> decommissioned
     owner and issues the LDevID;
   - create the storage for the owner's data and start the workloads.
 - **Result:** state `enrolled`.
-- **On failure:** the device stays `manufactured`; the stage is repeated with a
-  new code.
+- **On failure:** the prepared binding and its resources stay. The owner can
+  repeat enrollment for the same domain with a new code.
+
+### 3a. Re-enrollment
+
+- **Actor:** firmware and workload.
+- **Input:** an enrolled device whose identity is lost, the same domain, a new
+  enrollment code.
+- **Actions:** present the code; the IDevID shows the server it is the same
+  machine; the server issues a new LDevID.
+- **Result:** identity valid. Nothing on the device is created or removed.
+- **On failure:** the identity stays lost; the stage is repeated with a new
+  code.
+- A code given to a device whose identity is valid is refused and not kept.
 
 ### 4. Operation
 
@@ -123,7 +145,14 @@ none -> manufactured -> enrolled -> decommissioned
   - the firmware keeps the workloads in their specified state;
   - the workload speaks the protocols and asks the firmware to sign and
     decrypt;
-  - the operational key can be replaced; the LDevID and the IDevID remain.
+  - the operational key can be replaced; the LDevID and the IDevID remain;
+  - the workload renews the LDevID's credentials without a person while the
+    domain accepts them;
+  - the firmware keeps observing whether the workload holds a valid identity
+    and records when it is lost;
+  - a device that lost its identity sends nothing to the server until the owner
+    gives a new code (stage 3a). A server that cannot be reached is not a loss
+    and is retried.
 
 ### 5. Update
 
@@ -180,11 +209,11 @@ none -> manufactured -> enrolled -> decommissioned
 3. Everything secret on disk is stored under the root secret.
 4. A device has one IDevID, unchanged until decommissioning.
 5. A device has one LDevID per domain. Losing or replacing it does not affect
-   the IDevID.
+   the IDevID, the binding to the domain or the owner's data.
 6. Every stage can be repeated; a failed stage does not destroy the result of
    the stages before it.
-7. An enrollment code is used once, arrives only as the input of stage 3 and is
-   not kept after it.
+7. An enrollment code is used once, arrives only as the input of stage 3 or 3a
+   and is not kept after it.
 8. An update preserves identity and user data. It refuses a release that drops,
    renames or reclasses held user data. Workloads own the data format and must
    keep it readable across firmware reinstall and workload rollback.
@@ -220,7 +249,8 @@ none -> manufactured -> enrolled -> decommissioned
 ## Not defined yet
 
 - Publisher signatures for the image (stage 0).
-- A specified state delivered by the domain (stage 4).
+- A specified state delivered by the domain (stage 4), and delivery of the
+  device's own state to the domain.
 - How the server detects a clone (rule 9).
 
 ## References

@@ -110,7 +110,7 @@ func TestLinkTransitionPublishesSystemdStatusBeforeJournalFlush(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer socket.Close()
-	publish, finish := startLinkStatus(service.Notifier{Socket: path})
+	publish, finish := startLinkStatus(service.Notifier{Socket: path}, func() string { return "identity_lost" })
 	defer finish()
 	manager := &apiManager{updateLinkStatus: publish}
 	manager.recordLink(deviceapi.LinkEvent{Event: "device_api_link", State: "connected", ReconnectCount: 2})
@@ -118,9 +118,9 @@ func TestLinkTransitionPublishesSystemdStatusBeforeJournalFlush(t *testing.T) {
 	_ = socket.SetReadDeadline(time.Now().Add(time.Second))
 	buf := make([]byte, 128)
 	for _, want := range []string{
-		"STATUS=Device API link inactive (reconnects 0)",
-		"STATUS=Device API link connected (reconnects 2)",
-		"STATUS=Device API link reconnecting (reconnects 2)",
+		"STATUS=identity_lost | Device API link inactive (reconnects 0)",
+		"STATUS=identity_lost | Device API link connected (reconnects 2)",
+		"STATUS=identity_lost | Device API link reconnecting (reconnects 2)",
 	} {
 		n, _, err := socket.ReadFromUnix(buf)
 		if err != nil || string(buf[:n]) != want {

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"os/signal"
@@ -23,49 +22,45 @@ import (
 
 var firmwareVersion = "development"
 
-const (
-	notInstalled      = "not installed"
-	manufactured      = "manufactured and not enrolled"
-	enrollmentPending = "enrollment pending"
-	enrolled          = "enrolled"
-)
-
-func lifecycle(snapshot configuration.Snapshot) string {
-	switch {
-	case snapshot.Device == nil:
-		return notInstalled
-	case snapshot.Removal != nil:
-		return enrollmentPending
-	case snapshot.Enrollment == nil:
-		return manufactured
-	case snapshot.Enrollment.Outcome != configuration.Enrolled:
-		return enrollmentPending
-	default:
-		return enrolled
-	}
-}
-
 func localState(store configuration.Store) (configuration.Snapshot, error) {
 	snapshot, err := store.Snapshot()
 	if errors.Is(err, configuration.ErrMissing) {
 		return configuration.Snapshot{}, nil
+	}
+	if errors.Is(err, configuration.ErrDecommissionPending) {
+		return configuration.Snapshot{Decommissioning: true}, nil
 	}
 	return snapshot, err
 }
 
 func runStateCommand(args []string, stdout, stderr io.Writer) int {
 	path := defaultStateDir
-	if len(args) != 1 {
-		if len(args) != 3 || args[1] != "--state-dir" || args[2] == "" {
+	var asJSON, hasStateDir bool
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--json":
+			if asJSON || args[0] != "status" {
+				return report(stderr, "invalid_usage", 2)
+			}
+			asJSON = true
+		case "--state-dir":
+			if hasStateDir || i+1 == len(args) || args[i+1] == "" {
+				return report(stderr, "invalid_usage", 2)
+			}
+			i++
+			path, hasStateDir = args[i], true
+		default:
 			return report(stderr, "invalid_usage", 2)
 		}
-		path = args[2]
 	}
 	if os.Geteuid() != 0 {
 		return report(stderr, "root_required", 1)
 	}
 	store := configuration.Store{Path: path}
 	if args[0] == "status" {
+		if asJSON {
+			return renderStatus(store, true, stdout, stderr)
+		}
 		return showStatus(store, stdout, stderr)
 	}
 	if err := store.CheckLegacy(); err != nil {
@@ -86,68 +81,22 @@ func runStateCommand(args []string, stdout, stderr io.Writer) int {
 	return respond(stdout, stderr, result)
 }
 
-var listStatusData = func(ctx context.Context, store configuration.Store) ([]dockerengine.VolumeInfo, error) {
-	address, err := store.EngineAddress()
-	if err != nil {
-		return nil, err
-	}
-	engine, err := dockerengine.New(address)
-	if err != nil {
-		return nil, err
-	}
-	defer engine.Close()
-	return engine.RetainedData(ctx, "")
-}
-
-func showStatus(store configuration.Store, stdout, stderr io.Writer) int {
-	snapshot, err := localState(store)
-	if err != nil {
-		return report(stderr, err.Error(), 1)
-	}
-	state := lifecycle(snapshot)
-	message := "Device " + state + "\nFirmware " + firmwareVersion + "\n"
-	if snapshot.Device != nil {
-		message += "IDevID " + snapshot.Device.Thumbprint() + "\n"
-	}
-	if state == enrolled {
-		message += "Issuer " + snapshot.Enrollment.Profile.AuthIssuer + "\n"
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	volumes, err := listStatusData(ctx, store)
-	switch {
-	case err != nil:
-		message += "User data: unknown (local engine unavailable)\n"
-	case len(volumes) == 0:
-		message += "User data: []\n"
-	default:
-		message += "User data:\n"
-		for _, volume := range volumes {
-			issuer := volume.Issuer
-			if issuer == "" {
-				issuer = "unknown"
-			}
-			created := volume.CreatedAt
-			if created == "" {
-				created = "unknown"
-			}
-			message += fmt.Sprintf("  %s  %s  %s\n", issuer, volume.Name, created)
-		}
-	}
-	if n, err := io.WriteString(stdout, message); err != nil || n != len(message) {
-		return report(stderr, "output_failed", 1)
-	}
-	return 0
-}
-
 func serve(parent context.Context, store configuration.Store, stdout io.Writer) error {
 	notifier := (service.Systemd{Layout: hostLayout}).Notifier()
-	publishLinkStatus, finishLinkStatus := startLinkStatus(notifier)
-	manager := &apiManager{updateLinkStatus: publishLinkStatus}
+	manager := &apiManager{}
+	publishRuntime := func(status *runtimeStatus) {
+		if store.Path == defaultStateDir {
+			writeRuntimeStatus(hostLayout, status)
+		}
+	}
+	publishRuntime(nil)
+	publishLinkStatus, finishLinkStatus := startLinkStatus(notifier, manager.currentPhase)
+	manager.updateLinkStatus = publishLinkStatus
 	defer func() {
 		manager.close()
 		finishLinkStatus()
 		manager.drain(stdout)
+		publishRuntime(nil)
 	}()
 	event := func(value any) error {
 		if !writeServiceRecord(stdout, value) {
@@ -155,18 +104,49 @@ func serve(parent context.Context, store configuration.Store, stdout io.Writer) 
 		}
 		return nil
 	}
-	var previousState string
+	var previousIdentity configuration.IdentityCondition
+	if initial, err := localState(store); err == nil && initial.Enrollment != nil {
+		previousIdentity = initial.Enrollment.Identity
+	}
+	manager.observeIdentity = func(current configuration.IdentityCondition) error {
+		if current.Status == previousIdentity.Status && current.Reason == previousIdentity.Reason {
+			return nil
+		}
+		if err := event(identityTransitionRecord(previousIdentity, current)); err != nil {
+			return err
+		}
+		previousIdentity = current
+		return nil
+	}
 	return supervisor.Run(parent, func(ctx context.Context) (bool, error) {
 		result, err := executeManaged(ctx, store, manager)
 		manager.drain(stdout)
 		if snapshot, currentErr := localState(store); currentErr == nil {
-			if state := lifecycle(snapshot); state != previousState {
+			now := time.Now().UTC().Truncate(time.Second)
+			state, _ := phaseOf(snapshot, now)
+			if state != manager.currentPhase() {
 				if err := event(struct {
 					DeviceState string `json:"device_state"`
 				}{state}); err != nil {
 					return false, err
 				}
-				previousState = state
+				manager.phase.Store(&state)
+				if publishLinkStatus != nil {
+					publishLinkStatus(manager.currentLink())
+				}
+			}
+			if e := snapshot.Enrollment; e != nil {
+				if err := manager.observeIdentity(e.Identity); err != nil {
+					return false, err
+				}
+				if snapshot.Removal != nil {
+					publishRuntime(nil)
+				} else if !errors.Is(err, configuration.ErrBusy) {
+					publishRuntime(observedRuntime(snapshot, manager.currentLink(), err, now))
+				}
+			} else {
+				previousIdentity = configuration.IdentityCondition{}
+				publishRuntime(nil)
 			}
 		}
 		return result.Changed, err
@@ -181,6 +161,39 @@ func serve(parent context.Context, store configuration.Store, stdout io.Writer) 
 		}
 		return nil
 	}, supervisor.Interval)
+}
+
+type identityTransitionRecordFields struct {
+	Event          string                       `json:"event"`
+	PreviousStatus string                       `json:"previous_status"`
+	PreviousReason configuration.IdentityReason `json:"previous_reason"`
+	Status         string                       `json:"status"`
+	Reason         configuration.IdentityReason `json:"reason"`
+}
+
+func identityTransitionRecord(previous, current configuration.IdentityCondition) identityTransitionRecordFields {
+	if previous.Status == "" {
+		previous.Status, previous.Reason = "unknown", configuration.IdentityUnobserved
+	}
+	return identityTransitionRecordFields{"identity_condition_changed", previous.Status, previous.Reason, current.Status, current.Reason}
+}
+
+func observedRuntime(snapshot configuration.Snapshot, link deviceapi.LinkEvent, err error, now time.Time) *runtimeStatus {
+	e := snapshot.Enrollment
+	status := &runtimeStatus{
+		Generation: snapshot.Device.Generation(), Binding: workload.EnrollmentID(e.Profile.AuthIssuer), BoundAt: e.BoundAt,
+		Workloads: statusCondition{Type: "workloads_ready", Status: "true", Reason: "converged", LastProbeTime: now},
+		Link:      statusCondition{Type: "link_ready", Status: "unknown", Reason: "not_observed"},
+	}
+	if err != nil {
+		status.Workloads.Status, status.Workloads.Reason = "false", supervisor.ErrorCode(err)
+	}
+	if link.State == "connected" {
+		status.Link.Status, status.Link.Reason = "true", "connected"
+	} else if link.Reason != "" {
+		status.Link.Status, status.Link.Reason = "false", string(link.Reason)
+	}
+	return status
 }
 
 var refreshResources = func(ctx context.Context, profile backendprofile.Profile) ([]byte, error) {
@@ -273,6 +286,11 @@ func executeManaged(parent context.Context, store configuration.Store, manager *
 		if manager == nil {
 			return errAPIServe
 		}
+		if manager.observeIdentity != nil {
+			if err := manager.observeIdentity(snapshot.Enrollment.Identity); err != nil {
+				return err
+			}
+		}
 		stack, refreshed, err := manager.stack(ctx, snapshot)
 		if err != nil {
 			return err
@@ -306,8 +324,8 @@ func executeManaged(parent context.Context, store configuration.Store, manager *
 				return err
 			}
 		}
-		if snapshot.Enrollment.Outcome != configuration.Enrolled {
-			outcome, statusErr := manager.status.Run(ctx, engine, stack)
+		if target.ID != "" {
+			outcome, statusErr := manager.status.Run(ctx, engine, target, stack.Client.EnrollmentStatus)
 			if statusErr == nil {
 				return observeEnrollment(session, snapshot.Enrollment, outcome)
 			}

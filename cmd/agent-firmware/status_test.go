@@ -49,7 +49,7 @@ func TestStatusShowsRetainedDataAndHandlesUnavailableEngine(t *testing.T) {
 				return test.volumes, test.engineErr
 			}
 			var out, stderr bytes.Buffer
-			if code := showStatus(store, &out, &stderr); code != 0 || stderr.Len() != 0 || !strings.Contains(out.String(), "Device "+manufactured) {
+			if code := showStatus(store, &out, &stderr); code != 0 || stderr.Len() != 0 || !strings.Contains(out.String(), "Device manufactured and not enrolled") {
 				t.Fatalf("device status lost: %q %q", &out, &stderr)
 			}
 			for _, line := range test.want {

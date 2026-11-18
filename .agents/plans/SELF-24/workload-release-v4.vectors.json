@@ -410,6 +410,13 @@
     "reason": "code_refused"
    },
    {
+    "state": "unenrolled"
+   },
+   {
+    "state": "unenrolled",
+    "reason": "sign_in_required"
+   },
+   {
     "state": "deregistered"
    }
   ],

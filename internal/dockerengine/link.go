@@ -51,7 +51,15 @@ func (e *Engine) clientTarget(parent context.Context, stack workload.Stack, requ
 		}
 		if requireImage {
 			image, ok := e.images[spec.Image]
-			if !ok || !matches(spec, c, image) {
+			if !ok {
+				// A standalone status probe has no convergence image cache.
+				// Verify the pinned local image without pulling or applying anything.
+				image, err = e.api.ImageInspect(ctx, spec.Image)
+				if err != nil {
+					return ClientTarget{}, linkOpenFailure(err, deviceapi.LinkTargetUnverified)
+				}
+			}
+			if !matches(spec, c, image) {
 				return ClientTarget{}, deviceapi.LinkTargetUnverified
 			}
 		}

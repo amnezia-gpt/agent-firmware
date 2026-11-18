@@ -19,6 +19,7 @@ const (
 	EnrollmentPending   EnrollmentOutcome = "pending"
 	EnrollmentFailed    EnrollmentOutcome = "failed"
 	EnrollmentComplete  EnrollmentOutcome = "enrolled"
+	EnrollmentAbsent    EnrollmentOutcome = "unenrolled"
 	ErrEnrollmentStatus workload.Error    = "enrollment_status_unavailable"
 )
 
@@ -33,7 +34,8 @@ type StatusCommand struct {
 	active string
 }
 
-func (s *StatusCommand) Run(parent context.Context, e *Engine, stack workload.Stack) (EnrollmentOutcome, error) {
+// Run executes the status command on a target already verified by ClientTarget.
+func (s *StatusCommand) Run(parent context.Context, e *Engine, target ClientTarget, command []string) (EnrollmentOutcome, error) {
 	ctx, cancel := context.WithTimeout(parent, e.callTimeout)
 	defer cancel()
 	if s.active != "" {
@@ -43,15 +45,11 @@ func (s *StatusCommand) Run(parent context.Context, e *Engine, stack workload.St
 		}
 		s.active = ""
 	}
-	target, err := e.ClientTarget(ctx, stack)
-	if err != nil {
-		return "", ErrEnrollmentStatus
-	}
-	return s.run(ctx, e, target.ID, target.User, stack.Client.EnrollmentStatus)
+	return s.run(ctx, e, target.ID, target.User, command)
 }
 
 func (s *StatusCommand) run(ctx context.Context, e *Engine, id, user string, command []string) (EnrollmentOutcome, error) {
-	return s.control(ctx, e, id, user, command, EnrollmentComplete, EnrollmentPending, EnrollmentFailed)
+	return s.control(ctx, e, id, user, command, EnrollmentComplete, EnrollmentPending, EnrollmentFailed, EnrollmentAbsent)
 }
 
 func (s *StatusCommand) control(ctx context.Context, e *Engine, id, user string, command []string, allowed ...EnrollmentOutcome) (EnrollmentOutcome, error) {

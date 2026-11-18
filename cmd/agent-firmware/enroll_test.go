@@ -47,10 +47,16 @@ func TestEnrollmentRefusalAndRetryPreserveDeviceAndPinIssuer(t *testing.T) {
 	stubStatusData(t)
 	enableTestRelease(t)
 	profile := fixture(t, profileFixture)
-	originalDiscover, originalCheck, originalCodes := discover, checkWorkloadVolumes, openCodes
+	originalDiscover, originalCheck, originalCodes, originalProbe := discover, checkWorkloadVolumes, openCodes, probeExistingEnrollment
 	t.Cleanup(func() {
-		discover, checkWorkloadVolumes, openCodes = originalDiscover, originalCheck, originalCodes
+		discover, checkWorkloadVolumes, openCodes, probeExistingEnrollment = originalDiscover, originalCheck, originalCodes, originalProbe
 	})
+	probeExistingEnrollment = func(_ context.Context, _ *configuration.Session, snapshot configuration.Snapshot) (dockerengine.EnrollmentOutcome, error) {
+		if snapshot.Enrollment.Identity.Reason == configuration.IdentityConfirmed {
+			return dockerengine.EnrollmentComplete, nil
+		}
+		return dockerengine.EnrollmentFailed, nil
+	}
 	discoveries, checks := 0, 0
 	const issuer = "https://auth.example"
 	discover = func(_ context.Context, got string) ([]byte, error) {
@@ -79,7 +85,7 @@ func TestEnrollmentRefusalAndRetryPreserveDeviceAndPinIssuer(t *testing.T) {
 			t.Fatalf("status=%q stderr=%q", &out, &stderr)
 		}
 	}
-	show(notInstalled, false)
+	show("not installed", false)
 	device, err := configuration.ParseDevice(bytes.NewReader(fixture(t, manifestFixture)))
 	if err != nil {
 		t.Fatal(err)
@@ -87,7 +93,7 @@ func TestEnrollmentRefusalAndRetryPreserveDeviceAndPinIssuer(t *testing.T) {
 	if _, err := store.Manufacture(device, nil); err != nil {
 		t.Fatal(err)
 	}
-	show(manufactured, false)
+	show("manufactured and not enrolled", false)
 	// A manufactured service becomes ready even with an unusable engine address.
 	if err := os.WriteFile(filepath.Join(store.Path, host.EngineState), []byte("invalid"), 0600); err != nil {
 		t.Fatal(err)
@@ -112,7 +118,7 @@ func TestEnrollmentRefusalAndRetryPreserveDeviceAndPinIssuer(t *testing.T) {
 		finished := make(chan struct{})
 		go func() {
 			defer close(finished)
-			_, err := enrollDevice(ctx, store, layout, issuer, code, time.Millisecond, progress)
+			_, err := enrollDevice(ctx, store, layout, issuer, []byte(code), time.Millisecond, progress)
 			done <- err
 		}()
 		t.Cleanup(func() { cancel(); <-finished })
@@ -160,8 +166,8 @@ func TestEnrollmentRefusalAndRetryPreserveDeviceAndPinIssuer(t *testing.T) {
 		t.Fatalf("refusal left a code or returned the wrong result: %v", err)
 	}
 	cancel()
-	show(enrollmentPending, false)
-	if _, err := enrollDevice(t.Context(), store, layout, "https://other.example", "", time.Millisecond, func(string) {}); err != configuration.ErrIdentityConflict {
+	show("enrollment failed", true)
+	if _, err := enrollDevice(t.Context(), store, layout, "https://other.example", nil, time.Millisecond, func(string) {}); err != configuration.ErrIdentityConflict {
 		t.Fatalf("a second issuer was accepted: %v", err)
 	}
 	done, cancel = attempt(secondCode)
@@ -169,13 +175,13 @@ func TestEnrollmentRefusalAndRetryPreserveDeviceAndPinIssuer(t *testing.T) {
 	if !codes.Held() {
 		t.Fatal("a stale failed status discarded the second code")
 	}
-	show(enrollmentPending, false)
+	show("enrolling", true)
 	observe(dockerengine.EnrollmentComplete)
 	if err := <-done; err != nil || codes.Held() {
 		t.Fatalf("retry failed or left a code: %v", err)
 	}
 	cancel()
-	show(enrolled, true)
+	show("enrolled", true)
 	progressMu.Lock()
 	shown := strings.Join(progressLines, "\n")
 	progressMu.Unlock()
@@ -191,11 +197,11 @@ func TestEnrollmentRefusalAndRetryPreserveDeviceAndPinIssuer(t *testing.T) {
 	if _, err := store.Manufacture(device, nil); err != nil {
 		t.Fatal(err)
 	}
-	show(enrolled, true)
-	if got, err := enrollDevice(t.Context(), store, layout, issuer, "", time.Millisecond, func(string) {}); err != nil || got != "attached" {
-		t.Fatalf("retry lost attachment result: %q, %v", got, err)
+	show("enrolled", true)
+	if _, err := enrollDevice(t.Context(), store, layout, issuer, nil, time.Millisecond, func(string) {}); err != errAlreadyEnrolled {
+		t.Fatalf("enroll on a working device did not refuse: %v", err)
 	}
-	if discoveries != 1 || checks != 2 {
+	if discoveries != 1 || checks != 1 {
 		t.Fatalf("retry repeated initial enrollment checks: discovery=%d volume checks=%d", discoveries, checks)
 	}
 	if !bytes.Equal(manifestBefore, fixture(t, devicePath)) || !bytes.Equal(keyBefore, fixture(t, rootPath)) {

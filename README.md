@@ -44,18 +44,21 @@ It checks the target platform and required Device API.
 
 Firmware stores device state and enrollment state separately under `/var/lib/agent-firmware`.
 The device record contains the verified workload release and root secret fingerprint.
-The enrollment record contains the pinned backend profile and the observed enrollment outcome.
+The enrollment record contains the pinned backend profile, operational keys,
+and the latest observed condition of the operational identity.
 Both records use atomic replacement and the same writer lock. State directories require
 root ownership and mode 0700. State and lock files require 0600. Symlinks,
 special files, hard links, unsafe modes and wrong ownership fail. Earlier combined
 state is reported as `legacy_state_layout`.
 
-`sudo agent-firmware status` uses local state only. It reports whether the device is
-not installed, manufactured and not enrolled, pending enrollment, or enrolled.
-It includes the firmware version and the manufactured device’s IDevID thumbprint.
-It shows the current enrollment issuer when enrolled and lists retained user
+`sudo agent-firmware status` uses local state only. It reports the device phase,
+including identity loss or an unverified identity on a device bound to a domain.
+Use `status --json` for the versioned document with machine-readable conditions.
+It includes the firmware and workload versions and the device's IDevID thumbprint.
+It shows the bound issuer and lists retained user
 data by domain, volume name and creation time. An unavailable local engine
 leaves device status visible and marks the data inventory as unknown.
+The JSON document represents an unavailable data inventory as `null`.
 A directory sync failure reports `state_commit_uncertain`. Inspect status to
 learn which snapshot is visible.
 
@@ -143,10 +146,18 @@ a bounded time for the workload's outcome. A failed enrollment preserves the
 prepared resources for retry with the same issuer. An existing enrollment
 refuses a different issuer.
 
+If `status` reports `identity_lost`, run the new installation command from the
+device's page in your account. Enrollment for the same domain uses the fresh
+code with the existing binding, keys, containers and volumes. The result
+includes `enrollment: "renewed"`, or `"created"` for a new binding. A working
+device returns `already_enrolled`. When the workload's state is unavailable,
+the command returns `workload_unavailable`. The code stays unused in both cases.
+Recovery requires a workload release that reports `unenrolled`.
+
 `sudo agent-firmware update` downloads and runs the latest `agent-firmware-install.sh` without
 arguments. The device release updates independently of the enrollment. The
 installer locks the lifecycle under `/run/agent-firmware-install` and journals
-the previous binary pointer, unit and device record. An installation failure
+the previous binary pointer, unit, device record and enrollment record. An installation failure
 or interrupted install restores these from the journal.
 
 To leave a domain and delete the enrollment's local data, run:

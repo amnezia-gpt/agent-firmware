@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/amnezia-gpt/agent-firmware/internal/workload"
+	"github.com/amnezia-gpt/agent-firmware/internal/workloadrelease"
 	"github.com/moby/moby/api/types/container"
 )
 
@@ -53,11 +55,29 @@ func TestReadEnrollmentStatus(t *testing.T) {
 func TestEnrollmentStatusExecUsesOneBoundedUnprivilegedCommand(t *testing.T) {
 	id, execID := strings.Repeat("a", 64), strings.Repeat("b", 64)
 	command := []string{"control", "enrollment", "status"}
+	imageID := "sha256:" + strings.Repeat("c", 64)
+	spec := workload.Spec{Role: "gateway", Installation: strings.Repeat("0", 32), Name: "gateway", Network: "test-net",
+		Image: "registry.example/gateway@sha256:" + strings.Repeat("d", 64), User: "65532:65532", StopSeconds: 10}
+	stack := workload.Stack{Specs: []workload.Spec{spec}, Client: workloadrelease.APIClient{Service: spec.Role, EnrollmentStatus: command}}
+	configured := labels(spec.Installation, spec.Role)
+	configured[workload.LabelPrefix+"spec"] = spec.Hash()
 	path := socketServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.URL.Path == "/_ping":
 			w.Header().Set("API-Version", "1.52")
+		case r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/containers/"+spec.Name+"/json"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"Id": id, "Name": "/" + spec.Name, "Image": imageID,
+				"State": map[string]bool{"Running": true},
+				"Config": map[string]any{"Image": spec.Image, "User": spec.User, "Labels": configured, "StopTimeout": spec.StopSeconds,
+					"Healthcheck": map[string]any{"Test": []string{"CMD", "status"}, "Interval": 10 * time.Second, "Timeout": 5 * time.Second, "Retries": 3}},
+				"HostConfig": map[string]any{"CapDrop": []string{"ALL"}, "SecurityOpt": []string{"no-new-privileges"}, "NetworkMode": spec.Network,
+					"RestartPolicy": map[string]string{"Name": "unless-stopped"}, "Tmpfs": map[string]string{"/tmp": "rw,noexec,nosuid,nodev"}},
+				"NetworkSettings": map[string]any{"Networks": map[string]any{spec.Network: map[string]any{}}},
+			})
+		case r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/images/"+spec.Image+"/json"):
+			fmt.Fprintf(w, `{"Id":%q,"Config":{"User":%q,"Healthcheck":{"Test":["CMD","status"]}}}`, imageID, spec.User)
 		case strings.HasSuffix(r.URL.Path, "/containers/"+id+"/exec"):
 			var input container.ExecCreateRequest
 			if err := json.NewDecoder(r.Body).Decode(&input); err != nil || input.User != "65532:65532" ||
@@ -82,7 +102,7 @@ func TestEnrollmentStatusExecUsesOneBoundedUnprivilegedCommand(t *testing.T) {
 			defer conn.Close()
 			buf.WriteString("HTTP/1.1 101 UPGRADED\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n")
 			buf.Write(statusFrame(2, "redacted stderr"))
-			buf.Write(statusFrame(1, `{"state":"enrolled"}`))
+			buf.Write(statusFrame(1, `{"state":"unenrolled","reason":"sign_in_required"}`))
 			buf.Flush()
 		case strings.HasSuffix(r.URL.Path, "/exec/"+execID+"/json"):
 			fmt.Fprintf(w, `{"ID":%q,"ContainerID":%q,"Running":false,"ExitCode":0}`, execID, id)
@@ -96,9 +116,13 @@ func TestEnrollmentStatusExecUsesOneBoundedUnprivilegedCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer engine.Close()
+	target, err := engine.ClientTarget(t.Context(), stack)
+	if err != nil {
+		t.Fatalf("could not verify installed client without a cached image: %v", err)
+	}
 	status := &StatusCommand{}
-	got, err := status.run(t.Context(), engine, id, "65532:65532", command)
-	if err != nil || got != EnrollmentComplete || status.active != "" {
+	got, err := status.Run(t.Context(), engine, target, command)
+	if err != nil || got != "unenrolled" || status.active != "" {
 		t.Fatalf("outcome=%q err=%v outstanding exec=%q", got, err, status.active)
 	}
 }
@@ -131,7 +155,7 @@ func TestSchema4ControlResultVectors(t *testing.T) {
 			if json.Unmarshal(value, &malformed) == nil {
 				payload = malformed
 			}
-			_, err := readControlOutcome(bytes.NewReader(statusFrame(1, payload)), EnrollmentComplete, EnrollmentPending, EnrollmentFailed, "deregistered")
+			_, err := readControlOutcome(bytes.NewReader(statusFrame(1, payload)), EnrollmentComplete, EnrollmentPending, EnrollmentFailed, "unenrolled", "deregistered")
 			if (err == nil) != accept {
 				t.Fatalf("control result %s: %v", value, err)
 			}

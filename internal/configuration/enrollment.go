@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"time"
 
 	"github.com/amnezia-gpt/agent-firmware/internal/backendprofile"
 	"github.com/amnezia-gpt/agent-firmware/internal/deviceidentity"
@@ -15,7 +16,7 @@ import (
 	"github.com/amnezia-gpt/agent-firmware/internal/strictjson"
 )
 
-const enrollmentState = "profile.json"
+const enrollmentState = host.EnrollmentRecord
 
 type Outcome string
 
@@ -30,21 +31,30 @@ type Enrollment struct {
 	Outcome          Outcome
 	RetryWithCode    bool
 	AttachedUserData bool
+	Identity         IdentityCondition
+	BoundAt          time.Time
 	raw              []byte
 	keys             *deviceidentity.Operational
 	sealedKeys       string
 }
 
 type enrollmentRecord struct {
-	Version          int     `json:"schema_version"`
-	Profile          []byte  `json:"backend_profile"`
-	Outcome          Outcome `json:"outcome"`
-	RetryWithCode    bool    `json:"retry_with_code"`
-	Keys             string  `json:"operational_keys"`
-	AttachedUserData bool    `json:"attached_user_data"`
+	Version          int               `json:"schema_version"`
+	Profile          []byte            `json:"backend_profile"`
+	Outcome          Outcome           `json:"outcome"`
+	RetryWithCode    bool              `json:"retry_with_code"`
+	Keys             string            `json:"operational_keys"`
+	AttachedUserData bool              `json:"attached_user_data"`
+	Identity         IdentityCondition `json:"identity_condition"`
+	BoundAt          time.Time         `json:"bound_at"`
 }
 
 func (e *Enrollment) Input(d *Device) *Input { return d.withProfile(e.Profile, e.raw) }
+
+func (e *Enrollment) record() enrollmentRecord {
+	return enrollmentRecord{Version: 3, Profile: e.raw, Outcome: e.Outcome, RetryWithCode: e.RetryWithCode,
+		Keys: e.sealedKeys, AttachedUserData: e.AttachedUserData, Identity: e.Identity, BoundAt: e.BoundAt}
+}
 
 func enrollmentRoot(root *os.Root, name string) (*os.Root, error) {
 	info, err := root.Lstat(name)
@@ -80,22 +90,42 @@ func loadEnrollment(root *os.Root, device *Device) (*Enrollment, error) {
 	if err != nil {
 		return nil, err
 	}
-	fields, ok := strictjson.Object(data, "schema_version", "backend_profile", "outcome", "retry_with_code", "operational_keys", "attached_user_data")
+	fields, ok := strictjson.Members(data)
 	if !ok {
-		if old, valid := strictjson.Members(data); valid && old["operational_keys"] == nil {
-			return nil, ErrRootSecret
-		}
 		return nil, ErrCorrupt
+	}
+	if fields["operational_keys"] == nil {
+		return nil, ErrRootSecret
+	}
+	names := []string{"schema_version", "backend_profile", "outcome", "retry_with_code", "operational_keys", "attached_user_data"}
+	version := string(bytes.TrimSpace(fields["schema_version"]))
+	if version == "3" {
+		names = append(names, "identity_condition", "bound_at")
+	}
+	if len(fields) != len(names) || version != "2" && version != "3" {
+		return nil, ErrCorrupt
+	}
+	for _, name := range names {
+		if fields[name] == nil {
+			return nil, ErrCorrupt
+		}
 	}
 	retry := string(bytes.TrimSpace(fields["retry_with_code"]))
 	attached := string(bytes.TrimSpace(fields["attached_user_data"]))
-	if string(bytes.TrimSpace(fields["schema_version"])) != "2" || retry != "true" && retry != "false" || attached != "true" && attached != "false" {
+	if retry != "true" && retry != "false" || attached != "true" && attached != "false" {
 		return nil, ErrCorrupt
 	}
 	var record enrollmentRecord
 	if json.Unmarshal(data, &record) != nil ||
-		record.Outcome != Pending && record.Outcome != Failed && record.Outcome != Enrolled ||
-		record.Outcome != Pending && record.RetryWithCode {
+		record.Outcome != Pending && record.Outcome != Failed && record.Outcome != Enrolled {
+		return nil, ErrCorrupt
+	}
+	if record.Version == 2 {
+		record.Identity = legacyIdentity(record.Outcome)
+	} else if !validIdentityRecord(fields["identity_condition"], record) {
+		return nil, ErrCorrupt
+	}
+	if record.RetryWithCode && record.Identity.Reason != IdentityObtaining {
 		return nil, ErrCorrupt
 	}
 	profile, err := backendprofile.Parse(bytes.NewReader(record.Profile))
@@ -112,7 +142,32 @@ func loadEnrollment(root *os.Root, device *Device) (*Enrollment, error) {
 		return nil, ErrRootSecret
 	}
 	return &Enrollment{Profile: profile, Outcome: record.Outcome, RetryWithCode: record.RetryWithCode,
-		raw: record.Profile, keys: keys, sealedKeys: record.Keys, AttachedUserData: record.AttachedUserData}, nil
+		raw: record.Profile, keys: keys, sealedKeys: record.Keys, AttachedUserData: record.AttachedUserData,
+		Identity: record.Identity, BoundAt: record.BoundAt}, nil
+}
+
+func validIdentityRecord(raw []byte, record enrollmentRecord) bool {
+	fields, ok := strictjson.Members(raw)
+	condition := record.Identity
+	if !ok || fields["status"] == nil || fields["reason"] == nil || condition.Status == "" ||
+		conditionStatus(condition.Reason) != condition.Status ||
+		(condition.Reason == IdentityConfirmed || condition.Reason == IdentityLost) && record.Outcome != Enrolled ||
+		condition.Reason == IdentityRequired && record.Outcome == Enrolled {
+		return false
+	}
+	for name := range fields {
+		switch name {
+		case "status", "reason", "last_transition_time", "last_probe_time":
+		default:
+			return false
+		}
+	}
+	for _, at := range []time.Time{record.BoundAt, condition.LastTransitionTime, condition.LastProbeTime} {
+		if !at.IsZero() && (at.Location() != time.UTC || at.Nanosecond() != 0) {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Session) writeEnrollment(dirName string, record enrollmentRecord) error {
@@ -181,7 +236,13 @@ func (s *Session) BeginEnrollment(input *Input, attachedUserData bool) error {
 	if err != nil {
 		return ErrRootSecret
 	}
-	return s.createEnrollment(enrollmentRecord{2, input.profileBytes, Pending, false, keys, attachedUserData})
+	now := time.Now().UTC().Truncate(time.Second)
+	identity := legacyIdentity(Pending)
+	identity.LastTransitionTime = now
+	return s.createEnrollment(enrollmentRecord{
+		Version: 3, Profile: input.profileBytes, Outcome: Pending, Keys: keys, AttachedUserData: attachedUserData,
+		Identity: identity, BoundAt: now,
+	})
 }
 
 func (s *Session) SetOutcome(issuer string, outcome Outcome, retryWithCode bool) error {
@@ -199,7 +260,7 @@ func (s *Session) SetOutcome(issuer string, outcome Outcome, retryWithCode bool)
 	if existing.Outcome == Enrolled || existing.Outcome == outcome && existing.RetryWithCode == retryWithCode {
 		return nil
 	}
-	return s.writeEnrollment(host.EnrollmentDir, enrollmentRecord{2, existing.raw, outcome, retryWithCode, existing.sealedKeys, existing.AttachedUserData})
+	return s.SetIdentity(existing, legacyIdentity(outcome).Reason, time.Now(), outcome != Pending, retryWithCode)
 }
 
 // RefreshEnrollment updates only the discovered resources. The identity and
@@ -214,5 +275,7 @@ func (s *Session) RefreshEnrollment(existing *Enrollment, raw []byte) error {
 		profile.IngressTrustBundle != previous.IngressTrustBundle || profile.IngressTrustSHA256 != previous.IngressTrustSHA256 {
 		return ErrIdentityConflict
 	}
-	return s.writeEnrollment(host.EnrollmentDir, enrollmentRecord{2, raw, existing.Outcome, existing.RetryWithCode, existing.sealedKeys, existing.AttachedUserData})
+	record := existing.record()
+	record.Profile = raw
+	return s.writeEnrollment(host.EnrollmentDir, record)
 }

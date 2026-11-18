@@ -50,6 +50,60 @@ func TestManufactureAndEnrollmentKeepSeparateState(t *testing.T) {
 	}
 }
 
+func TestVersionTwoEnrollmentRecordPreservesBindingAndIdentity(t *testing.T) {
+	for outcome, want := range map[Outcome]IdentityReason{Enrolled: IdentityConfirmed, Pending: IdentityObtaining, Failed: IdentityRefused} {
+		t.Run(string(outcome), func(t *testing.T) {
+			store := testStore(t)
+			if _, err := store.Manufacture(testDevice(t), nil); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Exclusive(func(s *Session) error { return s.BeginEnrollment(testInput(t), true) }); err != nil {
+				t.Fatal(err)
+			}
+			before, err := store.Snapshot()
+			if err != nil {
+				t.Fatal(err)
+			}
+			old := before.Enrollment.record()
+			legacy := map[string]any{
+				"schema_version": 2, "backend_profile": old.Profile, "outcome": outcome,
+				"retry_with_code": outcome == Pending, "operational_keys": old.Keys, "attached_user_data": old.AttachedUserData,
+			}
+			raw, err := json.Marshal(legacy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(store.Path, "enrollment", enrollmentState)
+			if err := os.WriteFile(path, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			loaded, err := store.Snapshot()
+			if err != nil {
+				t.Fatal(err)
+			}
+			e := loaded.Enrollment
+			if !bytes.Equal(e.raw, old.Profile) || e.sealedKeys != old.Keys || !e.AttachedUserData || e.Outcome != outcome ||
+				e.RetryWithCode != (outcome == Pending) || e.Identity.Reason != want || !e.BoundAt.IsZero() || !e.Identity.LastProbeTime.IsZero() {
+				t.Fatal("version 2 enrollment lost state when read")
+			}
+			if e.Identity.Observed(time.Now()).Status != "unknown" {
+				t.Fatal("migration reported a probe that never ran")
+			}
+			if read, err := os.ReadFile(path); err != nil || !bytes.Equal(read, raw) {
+				t.Fatal("reading version 2 rewrote the record")
+			}
+			if err := store.Exclusive(func(s *Session) error {
+				return s.SetIdentity(e, want, time.Now(), true, false)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if written, err := os.ReadFile(path); err != nil || !bytes.Contains(written, []byte(`"schema_version":3`)) {
+				t.Fatal("observation did not migrate the record")
+			}
+		})
+	}
+}
+
 func TestManufactureDistinguishesLegacyAndDamagedState(t *testing.T) {
 	store := testStore(t)
 	input := testInput(t)
