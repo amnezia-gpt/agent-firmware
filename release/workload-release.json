@@ -1,8 +1,8 @@
 {
   "schema_version": 4,
   "kind": "workload-release",
-  "release": "v0.5.1",
-  "source_revision": "bba72b79bb49086c9e1cea9db78216bd9886caa0",
+  "release": "v0.7.0",
+  "source_revision": "38cbb398c564a2aa3b315d518bf0b4ea1014ce2d",
   "device_api": "urn:agent-firmware:device-api:v3",
   "platforms": [
     "linux/amd64"
@@ -93,7 +93,7 @@
       "stop_grace_seconds": 15,
       "image": {
         "repository": "docker.io/amneziavpn/agent-workload-amgpt-auth-proxy",
-        "digest": "sha256:d8d86ac0765de1806217695bde1116077bd8a5bdd268b2de4f324c2ff2cacab4"
+        "digest": "sha256:cc9fb373f6b32e90f745f642ca8525d60711047e20309a9a2426c8bb7df2b24c"
       }
     },
     "workload": {
@@ -123,7 +123,7 @@
       "stop_grace_seconds": 20,
       "image": {
         "repository": "docker.io/amneziavpn/agent-workload-openclaw-codex",
-        "digest": "sha256:f6c54bd4b4ccd9f77d1ffef76cb32872659c5e0dacc51a45da97a017d820d232"
+        "digest": "sha256:ae3efc9df53073bcab0cf7a1a3c357111d5d3ed8d83dd227f1de397cece83278"
       }
     },
     "codex-storage": {
@@ -153,7 +153,7 @@
       "stop_grace_seconds": 20,
       "image": {
         "repository": "docker.io/amneziavpn/agent-workload-openclaw-codex",
-        "digest": "sha256:f6c54bd4b4ccd9f77d1ffef76cb32872659c5e0dacc51a45da97a017d820d232"
+        "digest": "sha256:ae3efc9df53073bcab0cf7a1a3c357111d5d3ed8d83dd227f1de397cece83278"
       }
     }
   },
