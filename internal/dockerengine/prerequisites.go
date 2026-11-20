@@ -4,14 +4,11 @@ import (
 	"context"
 	"strings"
 
+	"github.com/amnezia-gpt/agent-firmware/internal/workload"
 	"github.com/moby/moby/client"
 )
 
-type PrerequisiteError string
-
-func (e PrerequisiteError) Error() string { return string(e) }
-
-const ErrPrerequisites PrerequisiteError = "unsupported_docker_prerequisites"
+const ErrPrerequisites = workload.ErrEnginePrerequisites
 
 // Prerequisites inspects the already prepared engine without creating resources.
 func (e *Engine) Prerequisites(parent context.Context) error {
@@ -21,7 +18,14 @@ func (e *Engine) Prerequisites(parent context.Context) error {
 	if err != nil {
 		return classify(err)
 	}
-	if info.Info.OSType != "linux" || (info.Info.Architecture != "amd64" && info.Info.Architecture != "x86_64") {
+	architecture := info.Info.Architecture
+	switch architecture {
+	case "x86_64":
+		architecture = "amd64"
+	case "aarch64":
+		architecture = "arm64"
+	}
+	if info.Info.OSType != e.platform.OS || architecture != e.platform.Architecture {
 		return ErrPrerequisites
 	}
 	for _, option := range info.Info.SecurityOptions {

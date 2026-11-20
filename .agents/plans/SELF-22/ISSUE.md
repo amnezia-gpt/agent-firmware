@@ -3,16 +3,16 @@
 ## Metadata
 
 - Type: Feature / platform
-- Status: Intake
+- Status: Validating (dual-platform manifest pinned, native stack acceptance pending)
 - Size / risk: Small / medium (touches image selection and the release build)
 - Parent: [SELF-14](../SELF-14/ISSUE.md)
 - Dependencies: [SELF-21](../SELF-21/ISSUE.md)
-- Authorization: recorded from the review of SELF-21 (2026-11-17); the owner agreed earlier to remove the fixed
-  architecture as a separate step. Implementation is not authorized yet.
+- Authorization: direction accepted by the owner on 2026-11-20. Work started with planning in dependency order.
+- Plan: [PLAN.md](PLAN.md)
 
 ## Problem
 
-The schema 3 manifest lists platforms, but the firmware checks for the fixed `linux/amd64` target. The engine
+The release manifest lists platforms, but the firmware checks for the fixed `linux/amd64` target. The engine
 pulls and creates containers for the same target, the host and engine checks accept only amd64, and a release
 ships one `linux-amd64` binary.
 
@@ -31,12 +31,22 @@ platform.
 
 ## Acceptance Criteria
 
-- [ ] Runtime platform selection comes from the host package. Architecture names in the manifest schema and
+- [x] Runtime platform selection comes from the host package. Architecture names in the manifest schema and
   release build matrix express supported targets.
 - [ ] On a `linux/arm64` host with a manifest listing that platform, the stack converges; with a manifest that
   does not list it, installation is refused before any change.
 - [ ] The bootstrap script installs the matching binary and verifies its digest on both platforms.
 
+## Verification
+
+The `linux/arm64` acceptance runs on an Ubuntu 24.04 arm64 VM with systemd on an Apple Silicon Mac, natively and
+without emulation. No separate disposable arm64 host is needed. SELF-33 tracks the macOS host itself.
+
+The ARM64 release binary accepted the dual-platform fixture and rejected the amd64-only pin before writing host
+state in an isolated native Ubuntu ARM64 container. The Go suite and the ARM64 bootstrap harness passed. See
+[PLAN.md](PLAN.md#validation) for commands and remaining native acceptance.
+
 ## Next Action
 
-Owner selects the issue after SELF-21. It needs workload images published for `linux/arm64`.
+Publish the dual-platform release after the native CI suite and bootstrap harness pass. Verify the update on
+Ubuntu 24.04 amd64 and the install and stack convergence on Ubuntu 24.04 arm64.

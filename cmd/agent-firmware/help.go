@@ -107,13 +107,15 @@ Changes: None on the host.
 Requires: Network access to the issuer.
 Example: agent-firmware discover-profile --issuer https://auth.example
 `, map[string]bool{"--issuer": true}, noInput(runDiscoverProfile)},
-	{"validate-release", checkCommands, "validate-release --release <file>",
+	{"validate-release", checkCommands, "validate-release --release <file> [--platform <os/arch>]",
 		"Check a workload release manifest for this firmware", `Check the workload release schema, platform and Device API compatibility.
+The platform defaults to the host's workload platform.
+Use --platform to check a release build target.
 
 Changes: None.
 Requires: A readable workload release file.
 Example: agent-firmware validate-release --release workload-release.json
-`, map[string]bool{"--release": true}, noInput(validateRelease)},
+`, map[string]bool{"--release": true, "--platform": true}, noInput(validateRelease)},
 	{"validate-profile", checkCommands, "validate-profile < <file>",
 		"Check a backend profile read from standard input", `Read and validate a backend profile from standard input.
 

@@ -6,6 +6,7 @@ import (
 	"github.com/amnezia-gpt/agent-firmware/internal/workload"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"net/http"
 	"strings"
 	"testing"
@@ -41,6 +42,9 @@ func TestCreateUsesManifestUserAndNamedVolumes(t *testing.T) {
 			return
 		}
 		if r.Method == "POST" {
+			if got := r.URL.Query().Get("platform"); got != "linux/arm64" {
+				t.Errorf("create platform: %q", got)
+			}
 			var request struct {
 				User       string
 				HostConfig struct{ Mounts []mount.Mount }
@@ -54,7 +58,7 @@ func TestCreateUsesManifestUserAndNamedVolumes(t *testing.T) {
 		}
 		fmt.Fprint(w, `{"Id":"example","Name":"/test"}`)
 	})
-	e, err := newClient(path, time.Second)
+	e, err := newEngine(path, time.Second, ocispec.Platform{OS: "linux", Architecture: "arm64"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -77,6 +77,9 @@ func Run(ctx context.Context, cycle func(context.Context) (bool, error), emit fu
 	}
 }
 func ErrorCode(err error) string {
+	if errors.Is(err, workload.ErrEnginePrerequisites) {
+		return workload.ErrEnginePrerequisites.Error()
+	}
 	for _, allowed := range []error{workloadrelease.ErrDeviceAPI, workloadrelease.ErrPlatform, backendprofile.ErrScopeMissing, backendprofile.ErrScopeAmbiguous, configuration.ErrInvalid, configuration.ErrLegacy, configuration.ErrUnsafe, configuration.ErrRead, configuration.ErrWrite, configuration.ErrCorrupt, configuration.ErrUncertain, configuration.ErrIdentityConflict, configuration.ErrRootSecret, deviceapi.ErrKeystore, configuration.ErrPending, workload.ErrEngine, workload.ErrConflict, workload.ErrHealth, workload.ErrTimeout, workload.ErrCanceled, workload.ErrDeadline, workload.ErrJournal, workload.ErrRecovery, workload.ErrCleanup} {
 		if errors.Is(err, allowed) {
 			return allowed.Error()

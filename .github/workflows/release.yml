@@ -1,19 +1,21 @@
 name: release
 
-# A pushed tag v* publishes the release: the installation script, the
-# linux/amd64 binary and the workload release file. The enrollment page of the
-# authorization server points at releases/latest/download/agent-firmware-install.sh,
-# so nothing outside this repository changes for a release.
+# A pushed tag v* publishes both Linux binaries, the common installer and the
+# pinned workload manifest.
 on:
+  pull_request:
   push:
     tags: ['v*']
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release:
-    runs-on: ubuntu-24.04
+  test:
+    strategy:
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -24,6 +26,22 @@ jobs:
           test -z "$(gofmt -l cmd internal)"
           go vet ./...
           CGO_ENABLED=0 go test ./...
+      - name: Check bootstrap
+        run: >-
+          docker run --rm --network none --tmpfs /run:rw,noexec,nosuid
+          --mount "type=bind,src=$PWD,dst=/work,readonly" ubuntu:24.04
+          sh -ec 'touch /run/agent-firmware-installer-test && sh /work/tests/agent-firmware-install.sh'
+  release:
+    if: github.ref_type == 'tag'
+    needs: test
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
       # The pinned workload release is not compared with the published one here:
       # the workloads repository is not public, so this job cannot download it.
       # Whoever replaces release/workload-release.json compares it by hand with
@@ -33,4 +51,7 @@ jobs:
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/agent-firmware-install.sh dist/agent-firmware-linux-amd64 dist/workload-release.json --verify-tag --generate-notes
+        run: >-
+          gh release create "$GITHUB_REF_NAME" dist/agent-firmware-install.sh
+          dist/agent-firmware-linux-amd64 dist/agent-firmware-linux-arm64 dist/workload-release.json
+          --verify-tag --generate-notes

@@ -155,7 +155,7 @@ func Install(ctx context.Context, request Request) (err error) {
 	r.say("Checking the host and preparing workload images")
 	if err := r.Firmware.Preflight(ctx); err != nil {
 		switch err {
-		case workload.ErrVolumeUnclassified, workload.ErrVolumeClass, workload.ErrUserVolumeMissing, workload.ErrConflict:
+		case workload.ErrEnginePrerequisites, workload.ErrVolumeUnclassified, workload.ErrVolumeClass, workload.ErrUserVolumeMissing, workload.ErrConflict:
 			return err
 		default:
 			return stateError(err, ErrDocker)
