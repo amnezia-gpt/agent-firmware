@@ -16,9 +16,10 @@ import (
 
 const MaxStateBytes = 132 * 1024
 
-// Store operates in a caller-selected private directory. CLI callers must be root.
+// Store operates in a caller-selected directory private to the firmware owner.
 type Store struct {
 	Path          string
+	EngineSocket  string
 	beforeRename  func() error
 	syncDirectory func(*os.File) error
 }

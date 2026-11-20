@@ -14,7 +14,6 @@ import (
 	"github.com/amnezia-gpt/agent-firmware/internal/dockerengine"
 	"github.com/amnezia-gpt/agent-firmware/internal/host"
 	"github.com/amnezia-gpt/agent-firmware/internal/installer"
-	"github.com/amnezia-gpt/agent-firmware/internal/service"
 	"github.com/amnezia-gpt/agent-firmware/internal/workload"
 )
 
@@ -35,8 +34,8 @@ func runDecommission(args []string, stdout, stderr io.Writer) int {
 		_, _ = io.WriteString(stderr, "Decommission deletes device keys and firmware. Add --delete-data to erase local data of all domains.\nRun agent-firmware decommission --confirm to proceed.\n")
 		return report(stderr, "confirmation_required", 2)
 	}
-	if os.Geteuid() != 0 {
-		return report(stderr, "root_required", 1)
+	if reason := host.AccessCheck(); reason != "" {
+		return report(stderr, reason, 1)
 	}
 
 	parent, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
@@ -44,7 +43,21 @@ func runDecommission(args []string, stdout, stderr io.Writer) int {
 	ctx, cancel := context.WithTimeout(parent, 10*time.Minute)
 	defer cancel()
 	progress := func(message string) { _, _ = io.WriteString(stderr, "agent-firmware: "+message+"\n") }
-	result, err := decommissionDevice(ctx, hostLayout, service.Systemd{Layout: hostLayout},
+	layout := hostLayout
+	if layout.UserService {
+		var err error
+		layout.EngineSocket, err = localEngineAddress(ctx, configuration.Store{Path: layout.State})
+		if err != nil {
+			return reportDecommissionError(stderr, err)
+		}
+		if err := checkEngine(ctx, layout.EngineSocket); err != nil {
+			return reportDecommissionError(stderr, err)
+		}
+		if err := installer.CheckParents(layout, true); err != nil {
+			return reportDecommissionError(stderr, err)
+		}
+	}
+	result, err := decommissionDevice(ctx, layout, localService(layout),
 		func(address string) (decommissionEngine, error) { return dockerengine.New(address) }, deleteData, progress)
 	if err != nil {
 		return reportDecommissionError(stderr, err)
@@ -53,7 +66,7 @@ func runDecommission(args []string, stdout, stderr io.Writer) int {
 }
 
 func reportDecommissionError(stderr io.Writer, err error) int {
-	if errors.Is(err, configuration.ErrUnsafe) {
+	if errors.Is(err, configuration.ErrUnsafe) && !hostLayout.UserService {
 		_, _ = io.WriteString(stderr, "agent-firmware: The state directory has an unexpected entry, owner or mode. Inspect its metadata:\n"+
 			"agent-firmware:   sudo find -P "+hostLayout.State+" -xdev -maxdepth 2 -printf '%y %m %U:%G links=%n %p\\n'\n")
 	}
@@ -70,7 +83,7 @@ func decommissionDevice(ctx context.Context, layout host.Layout, services instal
 	defer unlock()
 
 	progress("Checking ownership of firmware resources")
-	store := configuration.Store{Path: layout.State}
+	store := configuration.Store{Path: layout.State, EngineSocket: layout.EngineSocket}
 	if _, err := os.Lstat(layout.State); errors.Is(err, os.ErrNotExist) && !deleteData {
 		target, err := installer.InspectRemovalHost(ctx, layout, services, false)
 		if err != nil {

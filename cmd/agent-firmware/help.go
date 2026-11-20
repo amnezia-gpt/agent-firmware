@@ -77,7 +77,8 @@ Example: sudo agent-firmware update
 Changes: Removes containers, the network, enrollment volumes, operational
 keys and enrollment records. --delete-data also erases this domain's user data.
 Keeps: The IDevID and other domains' data. By default, keeps this domain's data.
-Requires: Root and --confirm. Without confirmation the command prints usage.
+Requires: Root and --confirm.
+Without confirmation the command prints usage.
 Example: sudo agent-firmware unenroll --confirm
 
 Data removed with --delete-data cannot be recovered.
@@ -237,7 +238,11 @@ func writeHelp(stdout, stderr io.Writer, text string) int {
 }
 
 func (cmd *commandSpec) help() string {
-	return "Usage: agent-firmware " + cmd.synopsis + "\n\n" + cmd.body
+	body := cmd.body
+	if hostLayout.UserService {
+		body = strings.ReplaceAll(body, "Requires: Root", "Requires: A user session")
+	}
+	return "Usage: agent-firmware " + cmd.synopsis + "\n\n" + operatorText(body)
 }
 
 func overview() string {

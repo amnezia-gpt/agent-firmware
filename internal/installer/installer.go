@@ -39,6 +39,7 @@ const (
 	ErrExisting    Error = "invalid_existing_configuration"
 	ErrConfigure   Error = "configuration_rejected"
 	ErrSystemd     Error = "systemd_unavailable"
+	ErrLaunchd     Error = "launchd_unavailable"
 	ErrStop        Error = "service_stop_failed"
 	ErrReload      Error = "service_reload_failed"
 	ErrEnable      Error = "service_enable_failed"
@@ -125,10 +126,8 @@ type run struct {
 func Install(ctx context.Context, request Request) (err error) {
 	r := &run{Request: request, transaction: filepath.Join(request.Layout.Base, ".transaction")}
 	l := r.Layout
-	for _, directory := range l.Parents {
-		if !r.safeDir(directory, 0o755) {
-			return ErrConflict
-		}
+	if err := CheckParents(l, true); err != nil {
+		return err
 	}
 	unlock, err := Lock(l)
 	if err != nil {
@@ -264,6 +263,11 @@ func Install(ctx context.Context, request Request) (err error) {
 // configuration lock while the caller waits for service readiness.
 func Lock(l hostplatform.Layout) (func(), error) {
 	r := run{Request: Request{Layout: l}}
+	if l.UserService {
+		if err := CheckParents(l, false); err != nil {
+			return nil, err
+		}
+	}
 	if !lexists(l.Lock) {
 		if err := os.Mkdir(l.Lock, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
 			return nil, ErrConflict
@@ -312,9 +316,12 @@ func (r *run) conflicts(ctx context.Context) error {
 	}
 	fragment, err := r.Services.Fragment(ctx)
 	if err != nil {
-		return ErrSystemd
+		return r.serviceError()
 	}
 	if fragment != "" && fragment != l.Unit {
+		return ErrConflict
+	}
+	if l.UserService && fragment != "" && !lexists(l.Unit) {
 		return ErrConflict
 	}
 	if lexists(l.Unit) && (!r.safeFile(l.Unit, 0o644) || !checkDefinition(l.Unit, r.Services.Owns)) {
@@ -339,6 +346,13 @@ func (r *run) conflicts(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (r *run) serviceError() Error {
+	if r.Layout.UserService {
+		return ErrLaunchd
+	}
+	return ErrSystemd
 }
 
 func stateError(err error, fallback Error) error {

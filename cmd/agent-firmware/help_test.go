@@ -105,7 +105,7 @@ func TestEveryHelpTopicAndFlagIsDispatched(t *testing.T) {
 				t.Error("help must use the installation script's file name")
 			}
 			if command.name == "decommission" &&
-				(!strings.Contains(want, "sudo sh agent-firmware-install.sh --decommission --confirm\n") ||
+				(!strings.Contains(want, operatorText("sudo sh agent-firmware-install.sh --decommission --confirm\n")) ||
 					!strings.Contains(want, "Those volumes cannot be attached") ||
 					!strings.Contains(want, "block a later install")) {
 				t.Error("help must explain offline removal and its effect on reinstalling")

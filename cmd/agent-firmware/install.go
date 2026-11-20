@@ -13,7 +13,6 @@ import (
 	"github.com/amnezia-gpt/agent-firmware/internal/dockerengine"
 	"github.com/amnezia-gpt/agent-firmware/internal/host"
 	"github.com/amnezia-gpt/agent-firmware/internal/installer"
-	"github.com/amnezia-gpt/agent-firmware/internal/service"
 	"github.com/amnezia-gpt/agent-firmware/internal/workload"
 )
 
@@ -26,6 +25,9 @@ func (f hostFirmware) Preflight(ctx context.Context) error {
 	address, err := f.store.EngineAddress()
 	if err != nil {
 		return err
+	}
+	if f.store.EngineSocket != "" && address != f.store.EngineSocket {
+		return configuration.ErrEngineChanged
 	}
 	engine, err := dockerengine.New(address)
 	if err != nil {
@@ -83,8 +85,11 @@ var (
 		if reason := host.InstallCheck(); reason != "" {
 			return reason
 		}
-		if !(service.Systemd{Layout: hostLayout}).Available() {
-			return "systemd_unavailable"
+		if !localService(hostLayout).Available() {
+			if hostLayout.UserService {
+				return installer.ErrLaunchd.Error()
+			}
+			return installer.ErrSystemd.Error()
 		}
 		return ""
 	}
@@ -94,9 +99,30 @@ var (
 			return installer.ErrWrite
 		}
 		store := configuration.Store{Path: defaultStateDir}
+		if hostLayout.UserService {
+			if err := installer.CheckParents(hostLayout, false); err != nil {
+				return err
+			}
+			address, err := dockerengine.ContextSocket(ctx)
+			if err != nil {
+				return err
+			}
+			stored, err := store.EngineAddress()
+			if err != nil && !errors.Is(err, configuration.ErrMissing) {
+				return err
+			}
+			if stored != "" && stored != address {
+				return configuration.ErrEngineChanged
+			}
+			if err := checkEngine(ctx, address); err != nil {
+				return err
+			}
+			progress("User data is kept in Docker Desktop's VM. Resetting or removing its data can delete these volumes. Switching engines makes the volumes unavailable.")
+			store.EngineSocket = address
+		}
 		return installer.Install(ctx, installer.Request{
 			Layout: hostLayout, Binary: binary,
-			Services: service.Systemd{Layout: hostLayout}, Firmware: hostFirmware{store, device}, Progress: progress,
+			Services: localService(hostLayout), Firmware: hostFirmware{store, device}, Progress: progress,
 		})
 	}
 )

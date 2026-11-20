@@ -14,7 +14,8 @@ func TestEngineAddressPersistsAndReadsOldState(t *testing.T) {
 	if err := os.Mkdir(store.Path, 0700); err != nil {
 		t.Fatal(err)
 	}
-	fallback := host.DefaultLayout().EngineSocket
+	fallback := filepath.Join(store.Path, "engine.sock")
+	store.EngineSocket = fallback
 	if address, err := store.EngineAddress(); err != nil || address != fallback {
 		t.Fatalf("old state: address=%q, error=%v", address, err)
 	}
@@ -30,6 +31,10 @@ func TestEngineAddressPersistsAndReadsOldState(t *testing.T) {
 	if err := os.WriteFile(path, []byte(alternate+"\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.PersistEngineAddress(); err != ErrEngineChanged {
+		t.Fatalf("changed context was accepted: %v", err)
+	}
+	store.EngineSocket = ""
 	if err := store.PersistEngineAddress(); err != nil {
 		t.Fatal(err)
 	}

@@ -15,6 +15,7 @@ set -eu
 release_tag='@@RELEASE_TAG@@'
 firmware_amd64_sha256='@@FIRMWARE_AMD64_SHA256@@'
 firmware_arm64_sha256='@@FIRMWARE_ARM64_SHA256@@'
+firmware_darwin_arm64_sha256='@@FIRMWARE_DARWIN_ARM64_SHA256@@'
 workload_sha256='@@WORKLOAD_RELEASE_SHA256@@'
 
 main() {
@@ -34,6 +35,7 @@ update an installed one. The firmware then does everything else:
 HELP
   return
  fi
+ caller_path=${PATH:-/usr/bin:/bin}
  PATH=/usr/sbin:/usr/bin:/sbin:/bin
  export PATH
  unset CDPATH
@@ -80,33 +82,57 @@ HELP
   *) die unreleased_script ;;
  esac
  case "$release_tag" in *[!0-9A-Za-z.+-]*) die unreleased_script ;; esac
- is_digest "$firmware_amd64_sha256" && is_digest "$firmware_arm64_sha256" && is_digest "$workload_sha256" || die unreleased_script
+ is_digest "$firmware_amd64_sha256" && is_digest "$firmware_arm64_sha256" \
+  && is_digest "$firmware_darwin_arm64_sha256" && is_digest "$workload_sha256" || die unreleased_script
 
- [ "$(id -u)" = 0 ] && [ "$(id -g)" = 0 ] || die root_required
- case "$(uname -s)/$(uname -m)" in
+ os=$(uname -s)
+ if [ "$os" = Linux ]; then
+  [ "$(id -u)" = 0 ] && [ "$(id -g)" = 0 ] || die root_required
+ fi
+ case "$os/$(uname -m)" in
   Linux/x86_64) firmware_asset=agent-firmware-linux-amd64; firmware_sha256=$firmware_amd64_sha256 ;;
   Linux/aarch64|Linux/arm64) firmware_asset=agent-firmware-linux-arm64; firmware_sha256=$firmware_arm64_sha256 ;;
+  Darwin/arm64) firmware_asset=agent-firmware-darwin-arm64; firmware_sha256=$firmware_darwin_arm64_sha256 ;;
   *) die unsupported_system ;;
  esac
- [ -f /etc/os-release ] || die unsupported_system
- grep -Eq '^ID=("ubuntu"|ubuntu)$' /etc/os-release && grep -Eq '^VERSION_ID=("24\.04"|24\.04)$' /etc/os-release || die unsupported_system
- [ -d /run/systemd/system ] || die unsupported_system
- for tool in curl sha256sum timeout mktemp; do
+ if [ "$os" = Darwin ]; then
+  [ "$(id -u)" != 0 ] || die root_forbidden
+  version=$(sw_vers -productVersion) || die unsupported_macos_version
+  major=${version%%.*}
+  case "$major" in ''|*[!0-9]*) die unsupported_macos_version ;; esac
+  [ "$major" -ge 15 ] || die unsupported_macos_version
+  platform_tools=shasum
+  work_parent=${TMPDIR:-/tmp}
+ else
+  [ -f /etc/os-release ] || die unsupported_system
+  grep -Eq '^ID=("ubuntu"|ubuntu)$' /etc/os-release && grep -Eq '^VERSION_ID=("24\.04"|24\.04)$' /etc/os-release || die unsupported_system
+  [ -d /run/systemd/system ] || die unsupported_system
+  platform_tools='sha256sum timeout'
+  work_parent=/usr/local/lib
+ fi
+ for tool in curl stat mktemp $platform_tools; do
   command -v "$tool" >/dev/null 2>&1 || die prerequisite_missing
  done
 
  # The work directory must allow execution: /run is mounted noexec on Ubuntu,
  # so it lives beside the place the firmware is installed to. It is private
  # (umask 077), holds no secret and is removed on exit.
- workdir=$(mktemp -d /usr/local/lib/agent-firmware-bootstrap.XXXXXXXX) || die bootstrap_write_failed
+ workdir=$(mktemp -d "${work_parent%/}/agent-firmware-bootstrap.XXXXXXXX") || die bootstrap_write_failed
  base_url=https://github.com/amnezia-gpt/agent-firmware/releases/download/$release_tag
  fetch() {
   # $1 asset name, $2 expected sha256, $3 size cap in bytes
   curl --proto '=https' --proto-redir '=https' --tlsv1.2 --fail --silent --location \
    --retry 3 --connect-timeout 20 --max-time 600 --max-filesize "$3" \
    --output "$workdir/$1" "$base_url/$1" </dev/null 2>/dev/null || die download_failed
-  [ "$(stat -c '%s' -- "$workdir/$1")" -le "$3" ] || die download_failed
-  [ "$(sha256sum "$workdir/$1" | cut -d ' ' -f 1)" = "$2" ] || die artifact_digest_mismatch
+  if [ "$os" = Darwin ]; then
+   size=$(stat -f '%z' "$workdir/$1") || die download_failed
+   checksum=$(shasum -a 256 "$workdir/$1") || die artifact_digest_mismatch
+  else
+   size=$(stat -c '%s' -- "$workdir/$1") || die download_failed
+   checksum=$(sha256sum "$workdir/$1") || die artifact_digest_mismatch
+  fi
+  [ "$size" -le "$3" ] || die download_failed
+  [ "${checksum%% *}" = "$2" ] || die artifact_digest_mismatch
  }
  say "Downloading firmware $release_tag"
  fetch "$firmware_asset" "$firmware_sha256" 67108864
@@ -115,7 +141,8 @@ HELP
  if [ "$decommission" = true ]; then
   reported=true
   shift
-  "$firmware" decommission "$@" </dev/null
+  if [ "$os" = Darwin ]; then PATH=$caller_path "$firmware" decommission "$@" </dev/null
+  else "$firmware" decommission "$@" </dev/null; fi
   return
  fi
 
@@ -125,6 +152,12 @@ HELP
  # reports its own error code; do not print a second one.
  say "Checking the workload release"
  status=0
+ if [ "$os" = Darwin ]; then
+  # The firmware validates the manifest and preflights the user's Docker context.
+  reported=true
+  PATH=$caller_path "$firmware" install --release "$workdir/workload-release.json" </dev/null
+  return
+ fi
  timeout 90s "$firmware" validate-release --release "$workdir/workload-release.json" \
   </dev/null >/dev/null || status=$?
  [ "$status" != 124 ] || die installation_check_timeout

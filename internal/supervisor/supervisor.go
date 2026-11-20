@@ -30,6 +30,7 @@ type Event struct {
 // Run owns one cycle at a time and emits only bounded state transitions.
 func Run(ctx context.Context, cycle func(context.Context) (bool, error), emit func(Event) error, interval time.Duration) error {
 	var previous Event
+	offlineDelay := 2 * time.Second
 	output := func(event Event) error {
 		if event == previous {
 			return nil
@@ -60,6 +61,8 @@ func Run(ctx context.Context, cycle func(context.Context) (bool, error), emit fu
 			event.State = "awaiting_configuration"
 		case errors.Is(err, configuration.ErrBusy):
 			event.State = "busy"
+		case errors.Is(err, workload.ErrEngineUnavailable):
+			event.State = "waiting_for_engine"
 		case err != nil:
 			event.State = "failed"
 			event.ErrorCode = ErrorCode(err)
@@ -67,7 +70,14 @@ func Run(ctx context.Context, cycle func(context.Context) (bool, error), emit fu
 		if err := output(event); err != nil {
 			return err
 		}
-		timer := time.NewTimer(interval)
+		delay := interval
+		if event.State == "waiting_for_engine" {
+			delay = offlineDelay
+			offlineDelay = min(offlineDelay*2, time.Minute)
+		} else {
+			offlineDelay = 2 * time.Second
+		}
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -79,6 +89,9 @@ func Run(ctx context.Context, cycle func(context.Context) (bool, error), emit fu
 func ErrorCode(err error) string {
 	if errors.Is(err, workload.ErrEnginePrerequisites) {
 		return workload.ErrEnginePrerequisites.Error()
+	}
+	if errors.Is(err, workload.ErrEngineUnavailable) {
+		return workload.ErrEngineUnavailable.Error()
 	}
 	for _, allowed := range []error{workloadrelease.ErrDeviceAPI, workloadrelease.ErrPlatform, backendprofile.ErrScopeMissing, backendprofile.ErrScopeAmbiguous, configuration.ErrInvalid, configuration.ErrLegacy, configuration.ErrUnsafe, configuration.ErrRead, configuration.ErrWrite, configuration.ErrCorrupt, configuration.ErrUncertain, configuration.ErrIdentityConflict, configuration.ErrRootSecret, deviceapi.ErrKeystore, configuration.ErrPending, workload.ErrEngine, workload.ErrConflict, workload.ErrHealth, workload.ErrTimeout, workload.ErrCanceled, workload.ErrDeadline, workload.ErrJournal, workload.ErrRecovery, workload.ErrCleanup} {
 		if errors.Is(err, allowed) {

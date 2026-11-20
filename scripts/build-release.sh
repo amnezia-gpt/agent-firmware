@@ -1,6 +1,6 @@
 #!/bin/sh
 # Builds the public assets of one firmware release into a directory:
-# both Linux binaries, the workload release file and the installation
+# the host binaries, the workload release file and the installation
 # script stamped with the tag and asset digests. Run by the release workflow;
 # runs the same way on a development machine.
 #
@@ -40,11 +40,13 @@ mkdir -p "$out"
 for arch do
  CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -ldflags "-X main.firmwareVersion=$tag" -o "$out/agent-firmware-linux-$arch" ./cmd/agent-firmware
 done
+CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-X main.firmwareVersion=$tag" -o "$out/agent-firmware-darwin-arm64" ./cmd/agent-firmware
 cp "$workload" "$out/workload-release.json"
 
 sed -e "s/@@RELEASE_TAG@@/$tag/" \
  -e "s/@@FIRMWARE_AMD64_SHA256@@/$(digest "$out/agent-firmware-linux-amd64")/" \
  -e "s/@@FIRMWARE_ARM64_SHA256@@/$(digest "$out/agent-firmware-linux-arm64")/" \
+ -e "s/@@FIRMWARE_DARWIN_ARM64_SHA256@@/$(digest "$out/agent-firmware-darwin-arm64")/" \
  -e "s/@@WORKLOAD_RELEASE_SHA256@@/$(digest "$out/workload-release.json")/" \
  scripts/agent-firmware-install.sh > "$out/agent-firmware-install.sh"
 ! grep -q '@@' "$out/agent-firmware-install.sh" || { echo 'a placeholder was left unstamped' >&2; exit 1; }

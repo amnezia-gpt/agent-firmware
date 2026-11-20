@@ -208,14 +208,14 @@ func (s *CodeStore) remove() error {
 	return nil
 }
 
-// EnrollmentCodes opens the store of one installation, creating the root-only
+// EnrollmentCodes opens the store of one installation, creating the private
 // runtime directories the service would otherwise create at its first start.
 func EnrollmentCodes(layout host.Layout, installation string, create bool) (*CodeStore, error) {
-	if os.Geteuid() != 0 || !installationPattern.MatchString(installation) {
+	if uint32(os.Geteuid()) != layout.UID || uint32(os.Getegid()) != layout.GID || !installationPattern.MatchString(installation) {
 		return nil, ErrKeystore
 	}
 	base := layout.InstallationRuntime(installation)
-	if create && (ensureDir(filepath.Dir(base), 0700, 0, 0) != nil || ensureDir(base, 0700, 0, 0) != nil) {
+	if create && (ensureDir(filepath.Dir(base), 0700, int(layout.UID), int(layout.GID)) != nil || ensureDir(base, 0700, int(layout.UID), int(layout.GID)) != nil) {
 		return nil, ErrKeystore
 	}
 	return &CodeStore{dir: base, now: time.Now}, nil

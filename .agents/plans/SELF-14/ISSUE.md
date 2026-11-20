@@ -7,7 +7,7 @@
 - Size / risk: Large / high (installation, identity, key custody and the device API all change)
 - Children: [SELF-15](../SELF-15/ISSUE.md), [SELF-16](../SELF-16/ISSUE.md), [SELF-17](../SELF-17/ISSUE.md),
   [SELF-18](../SELF-18/ISSUE.md), [SELF-19](../SELF-19/ISSUE.md), [SELF-20](../SELF-20/ISSUE.md),
-  [SELF-21](../SELF-21/ISSUE.md), [SELF-22](../SELF-22/ISSUE.md)
+  [SELF-21](../SELF-21/ISSUE.md), [SELF-22](../SELF-22/ISSUE.md), [SELF-33](../SELF-33/ISSUE.md)
 - Design: [DESIGN.md](DESIGN.md). Vocabulary and stages: [docs/device-lifecycle.md](../../../docs/device-lifecycle.md)
 - Authorization: owner accepted the lifecycle, the command form, the device API v3 operations and the identity
   statement format in the design dialogue of 2026-11-16 and 2026-11-17, and asked to record the issues.

@@ -2,6 +2,8 @@
 
 The release job requires a published schema 4 workload manifest that lists
 `linux/amd64` and `linux/arm64`, and firmware that serves the Device API it declares.
+It packages the Linux amd64 and arm64 binaries and the Apple Silicon binary
+with one bootstrap script. The macOS binary uses the Linux arm64 workloads.
 
 Store the published file verbatim in `release/workload-release.json`. Preserve
 its whitespace and final newline. The release job cannot download the published

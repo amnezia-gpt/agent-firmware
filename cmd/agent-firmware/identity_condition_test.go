@@ -169,6 +169,9 @@ func TestStatusDocumentAndTextShareDevicePhase(t *testing.T) {
 	} {
 		e := *snapshot.Enrollment
 		e.Identity = tc.condition
+		if hostLayout.UserService && tc.step == "check_service" {
+			tc.hint = "Check the firmware LaunchAgent in your login session and make sure Docker Desktop is running."
+		}
 		cases = append(cases, phaseCase{tc.phase, tc.heading, tc.step, tc.hint, configuration.Snapshot{Device: snapshot.Device, Enrollment: &e}})
 	}
 	for _, tc := range cases {

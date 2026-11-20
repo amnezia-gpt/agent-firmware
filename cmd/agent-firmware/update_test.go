@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/amnezia-gpt/agent-firmware/internal/host"
 )
 
 func TestUpdateCommandUsage(t *testing.T) {
@@ -15,9 +17,9 @@ func TestUpdateCommandUsage(t *testing.T) {
 	if code := run([]string{"update", "--issuer", "https://auth.example"}, strings.NewReader(""), &stdout, &stderr); code != 2 || stderr.String() != "agent-firmware: run 'agent-firmware help update' for usage\n{\"error_code\":\"invalid_usage\"}\n" {
 		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
 	}
-	if os.Geteuid() != 0 {
+	if reason := host.AccessCheck(); reason != "" {
 		stderr.Reset()
-		if code := run([]string{"update"}, strings.NewReader(""), &stdout, &stderr); code != 1 || stderr.String() != "{\"error_code\":\"root_required\"}\n" {
+		if code := run([]string{"update"}, strings.NewReader(""), &stdout, &stderr); code != 1 || stderr.String() != "{\"error_code\":\""+reason+"\"}\n" {
 			t.Fatalf("exit=%d stderr=%q", code, stderr.String())
 		}
 	}

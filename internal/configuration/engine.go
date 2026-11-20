@@ -10,40 +10,63 @@ import (
 	"github.com/amnezia-gpt/agent-firmware/internal/host"
 )
 
+const ErrEngineChanged Error = "docker_context_changed"
+
 // EngineAddress uses the installed socket, or the historical default for old state.
 func (s Store) EngineAddress() (string, error) {
 	root, err := s.root(false)
 	if errors.Is(err, ErrMissing) {
-		return host.DefaultLayout().EngineSocket, nil
+		return s.engineFallback()
 	}
 	if err != nil {
 		return "", err
 	}
 	defer root.Close()
-	return configuredEngineAddress(root)
+	return s.configuredEngineAddress(root)
 }
 
 func (s *Session) EngineAddress() (string, error) {
-	return configuredEngineAddress(s.root)
+	return s.store.configuredEngineAddress(s.root)
 }
 
-func configuredEngineAddress(root *os.Root) (string, error) {
+func (s Store) configuredEngineAddress(root *os.Root) (string, error) {
 	address, err := readEngineAddress(root)
 	if errors.Is(err, ErrMissing) {
-		return host.DefaultLayout().EngineSocket, nil
+		return s.engineFallback()
 	}
 	return address, err
+}
+
+func (s Store) engineFallback() (string, error) {
+	address := s.EngineSocket
+	if address == "" {
+		address = host.DefaultLayout().EngineSocket
+	}
+	if address == "" {
+		return "", ErrMissing
+	}
+	if !validEngineAddress(address) {
+		return "", ErrCorrupt
+	}
+	return address, nil
 }
 
 // PersistEngineAddress is called during installation, with the service stopped.
 func (s Store) PersistEngineAddress() error {
 	return s.Exclusive(func(session *Session) error {
-		_, err := readEngineAddress(session.root)
+		address, err := readEngineAddress(session.root)
 		if errors.Is(err, ErrMissing) {
-			return s.atomic(session.root, host.EngineState, []byte(host.DefaultLayout().EngineSocket+"\n"))
+			address, err := s.engineFallback()
+			if err != nil {
+				return err
+			}
+			return s.atomic(session.root, host.EngineState, []byte(address+"\n"))
 		}
 		if err != nil {
 			return err
+		}
+		if s.EngineSocket != "" && address != s.EngineSocket {
+			return ErrEngineChanged
 		}
 		return s.synchronize(session.root)
 	})
@@ -60,9 +83,13 @@ func readEngineAddress(root *os.Root) (string, error) {
 		return "", ErrRead
 	}
 	address, ok := strings.CutSuffix(string(data), "\n")
-	if len(data) > host.MaxEngineAddress || !ok || !filepath.IsAbs(address) || filepath.Clean(address) != address ||
-		address == string(filepath.Separator) || strings.ContainsAny(address, "\x00\r\n") {
+	if len(data) > host.MaxEngineAddress || !ok || !validEngineAddress(address) {
 		return "", ErrCorrupt
 	}
 	return address, nil
+}
+
+func validEngineAddress(address string) bool {
+	return len(address) < host.MaxEngineAddress && filepath.IsAbs(address) && filepath.Clean(address) == address &&
+		address != string(filepath.Separator) && !strings.ContainsAny(address, "\x00\r\n")
 }
