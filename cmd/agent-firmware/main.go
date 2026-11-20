@@ -87,7 +87,12 @@ var discover = func(ctx context.Context, issuer string) ([]byte, error) {
 var servedDeviceAPI = deviceapi.Protocol
 
 func checkPlatform(release workloadrelease.Release) error {
-	return release.CheckPlatform("linux/amd64")
+	return release.CheckPlatform(nativeWorkloadPlatform())
+}
+
+func nativeWorkloadPlatform() string {
+	platform := host.WorkloadPlatform()
+	return platform.OS + "/" + platform.Architecture
 }
 
 func checkDeployableRelease(release workloadrelease.Release) error {
@@ -98,6 +103,11 @@ func checkDeployableRelease(release workloadrelease.Release) error {
 }
 
 func validateRelease(args []string, stdout, stderr io.Writer) int {
+	platform := nativeWorkloadPlatform()
+	if len(args) == 4 && args[2] == "--platform" && args[3] != "" {
+		platform = args[3]
+		args = args[:2]
+	}
 	if len(args) != 2 || args[0] != "--release" || args[1] == "" {
 		return report(stderr, "invalid_usage", 2)
 	}
@@ -110,7 +120,10 @@ func validateRelease(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return report(stderr, err.Error(), 1)
 	}
-	if err := checkDeployableRelease(manifest); err != nil {
+	if err := manifest.CheckPlatform(platform); err != nil {
+		return report(stderr, err.Error(), 1)
+	}
+	if err := manifest.CheckDeviceAPI(servedDeviceAPI); err != nil {
 		return report(stderr, err.Error(), 1)
 	}
 	return respond(stdout, stderr, struct {

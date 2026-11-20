@@ -1,7 +1,7 @@
 #!/bin/sh
-# Builds the three public assets of one firmware release into a directory:
-# the linux/amd64 binary, the workload release file and the installation
-# script stamped with the tag and both digests. Run by the release workflow;
+# Builds the public assets of one firmware release into a directory:
+# both Linux binaries, the workload release file and the installation
+# script stamped with the tag and asset digests. Run by the release workflow;
 # runs the same way on a development machine.
 #
 #   sh scripts/build-release.sh <tag> <output directory>
@@ -29,16 +29,22 @@ if [ "${WORKLOAD_PUBLISHED_MANIFEST+x}" = x ]; then
  [ -f "$WORKLOAD_PUBLISHED_MANIFEST" ] && cmp -s "$workload" "$WORKLOAD_PUBLISHED_MANIFEST" \
   || { echo 'the workload release pin differs from the published manifest' >&2; exit 1; }
 fi
-# The firmware of this very revision must serve the API the release requires.
-go run ./cmd/agent-firmware validate-release --release "$workload" >/dev/null \
- || { echo 'this firmware rejects the workload release file' >&2; exit 1; }
+# Check every binary's target from the build host before writing release assets.
+set -- amd64 arm64
+for arch do
+ go run ./cmd/agent-firmware validate-release --release "$workload" --platform "linux/$arch" >/dev/null \
+  || { echo "this firmware rejects the workload release file for linux/$arch" >&2; exit 1; }
+done
 
 mkdir -p "$out"
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-X main.firmwareVersion=$tag" -o "$out/agent-firmware-linux-amd64" ./cmd/agent-firmware
+for arch do
+ CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -ldflags "-X main.firmwareVersion=$tag" -o "$out/agent-firmware-linux-$arch" ./cmd/agent-firmware
+done
 cp "$workload" "$out/workload-release.json"
 
 sed -e "s/@@RELEASE_TAG@@/$tag/" \
- -e "s/@@FIRMWARE_SHA256@@/$(digest "$out/agent-firmware-linux-amd64")/" \
+ -e "s/@@FIRMWARE_AMD64_SHA256@@/$(digest "$out/agent-firmware-linux-amd64")/" \
+ -e "s/@@FIRMWARE_ARM64_SHA256@@/$(digest "$out/agent-firmware-linux-arm64")/" \
  -e "s/@@WORKLOAD_RELEASE_SHA256@@/$(digest "$out/workload-release.json")/" \
  scripts/agent-firmware-install.sh > "$out/agent-firmware-install.sh"
 ! grep -q '@@' "$out/agent-firmware-install.sh" || { echo 'a placeholder was left unstamped' >&2; exit 1; }

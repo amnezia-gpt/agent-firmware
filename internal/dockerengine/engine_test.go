@@ -16,7 +16,12 @@ import (
 
 	"github.com/amnezia-gpt/agent-firmware/internal/workload"
 	"github.com/amnezia-gpt/agent-firmware/internal/workloadrelease"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
+
+func newClient(socket string, timeout time.Duration) (*Engine, error) {
+	return newEngine(socket, timeout, ocispec.Platform{OS: "linux", Architecture: "amd64"})
+}
 
 func socketServer(t *testing.T, handler http.HandlerFunc) string {
 	t.Helper()
@@ -219,6 +224,56 @@ func TestPrerequisitesRejectRootlessOrWrongPlatformWithoutMutations(t *testing.T
 	}
 }
 
+func TestPrerequisitesAcceptNativeARM64Engine(t *testing.T) {
+	for _, architecture := range []string{"aarch64", "arm64", "amd64"} {
+		t.Run(architecture, func(t *testing.T) {
+			path := socketServer(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/_ping" {
+					w.Header().Set("API-Version", "1.52")
+					return
+				}
+				json.NewEncoder(w).Encode(map[string]string{"OSType": "linux", "Architecture": architecture})
+			})
+			e, err := newEngine(path, time.Second, ocispec.Platform{OS: "linux", Architecture: "arm64"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer e.Close()
+			want := error(nil)
+			if architecture == "amd64" {
+				want = ErrPrerequisites
+			}
+			if err := e.Prerequisites(t.Context()); err != want {
+				t.Fatalf("engine prerequisite: got %v, want %v", err, want)
+			}
+		})
+	}
+}
+
+func TestPrepareRejectsImageForAnotherArchitecture(t *testing.T) {
+	path := socketServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/_ping" {
+			w.Header().Set("API-Version", "1.52")
+			return
+		}
+		if r.Method != "GET" || !strings.Contains(r.URL.Path, "/images/") {
+			t.Errorf("unexpected request with incompatible image: %s %s", r.Method, r.URL.Path)
+		}
+		io.WriteString(w, `{"Id":"image","Os":"linux","Architecture":"amd64","Config":{"User":"65532:65532","Healthcheck":{"Test":["CMD","check"]}}}`)
+	})
+	e, err := newEngine(path, time.Second, ocispec.Platform{OS: "linux", Architecture: "arm64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+	stack := workload.Stack{Specs: []workload.Spec{{Image: "example"}}}
+	for range 2 {
+		if err := e.Prepare(t.Context(), stack); !errors.Is(err, workload.ErrConflict) {
+			t.Fatalf("incompatible image: %v", err)
+		}
+	}
+}
+
 func TestManufacturePullsImagesForEnrollmentAndRetry(t *testing.T) {
 	manifest, err := os.Open("../workloadrelease/testdata/manifest.json")
 	if err != nil {
@@ -253,6 +308,9 @@ func TestManufacturePullsImagesForEnrollmentAndRetry(t *testing.T) {
 		case r.URL.Path == "/_ping":
 			w.Header().Set("API-Version", "1.52")
 		case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/images/create"):
+			if got := r.URL.Query().Get("platform"); got != "linux/arm64" {
+				t.Errorf("pull platform: %q", got)
+			}
 			pulls++
 			io.WriteString(w, "{\"status\":\"done\"}\n")
 		case r.Method == "GET" && strings.Contains(r.URL.Path, "/images/"):
@@ -261,7 +319,7 @@ func TestManufacturePullsImagesForEnrollmentAndRetry(t *testing.T) {
 				w.WriteHeader(http.StatusNotFound)
 				io.WriteString(w, `{"message":"missing"}`)
 			} else {
-				io.WriteString(w, `{"Id":"image","Os":"linux","Architecture":"amd64","Config":{"User":"65532:65532","Healthcheck":{"Test":["CMD","check"]}}}`)
+				io.WriteString(w, `{"Id":"image","Os":"linux","Architecture":"arm64","Config":{"User":"65532:65532","Healthcheck":{"Test":["CMD","check"]}}}`)
 			}
 		case !manufacturing && r.Method == "GET" && strings.Contains(r.URL.Path, "/networks/"):
 			json.NewEncoder(w).Encode(map[string]any{"Name": stack.Network, "Driver": "bridge", "Labels": labels(stack.Installation, "network")})
@@ -277,7 +335,7 @@ func TestManufacturePullsImagesForEnrollmentAndRetry(t *testing.T) {
 		}
 	})
 	for phase := range 3 {
-		e, err := newClient(path, time.Second)
+		e, err := newEngine(path, time.Second, ocispec.Platform{OS: "linux", Architecture: "arm64"})
 		if err != nil {
 			t.Fatal(err)
 		}

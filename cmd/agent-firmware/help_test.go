@@ -75,7 +75,7 @@ func TestEveryHelpTopicAndFlagIsDispatched(t *testing.T) {
 		"unenroll":         {{"--confirm", "--delete-data"}},
 		"decommission":     {{"--confirm", "--delete-data"}},
 		"discover-profile": {{"--issuer", "https://auth.example"}},
-		"validate-release": {{"--release", "manifest.json"}},
+		"validate-release": {{"--release", "manifest.json"}, {"--release", "manifest.json", "--platform", "linux/arm64"}},
 		"validate-profile": {{}},
 		"validate":         {{"--profile", "profile.json", "--release", "manifest.json"}},
 		"serve":            {{}, {"--state-dir", "state"}},

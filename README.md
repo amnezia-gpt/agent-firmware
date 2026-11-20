@@ -108,13 +108,14 @@ exits. This process can run in the foreground or under the installed unit.
 Installation has three responsibilities with one owner each:
 
 - **The script** `scripts/agent-firmware-install.sh` brings the firmware to the
-  host: it checks that the platform is supported (Ubuntu 24.04, amd64, systemd,
-  root), installs `docker.io` from the Ubuntu archive when no engine exists
-  (an existing engine is never modified), downloads the firmware binary and the
-  workload release file of its own release and verifies their SHA-256. It does
+  host: it checks for Ubuntu 24.04 with systemd and root access on amd64 or arm64,
+  downloads the matching firmware binary and the workload release manifest, and
+  verifies their SHA-256 digests. It checks the manifest before installing
+  `docker.io` from the Ubuntu archive when no engine exists. It does
   not read the enrollment code, parse a profile, write a unit or manage the
   service.
-- **The firmware** verifies the workload release, prepares digest-pinned images, places
+- **The firmware** verifies the workload release and that Docker runs Linux on the
+  host's architecture, prepares the native variants of the digest-pinned images, places
   itself, writes the systemd unit and rolls back a failed installation. The service
   can run on a manufactured host while it awaits enrollment. The enrollment command
   discovers the backend profile, and the service applies the enrolled workload.
@@ -217,8 +218,9 @@ for a missing scope. The signing keys pinned at enrollment are retained.
 A pushed `v*` tag triggers release CI. CI builds the assets from
 [the repository pin](release/workload-release.json) and does not download the
 published workload manifest; the pin is compared with it by hand when it is
-replaced. Asset generation requires the firmware to serve the manifest's API. The installer script checks
-the stamped digests of the binary and the same manifest before executing.
+replaced. Asset generation requires the firmware to serve the manifest's API
+and the manifest to list both Linux architectures. One installer script checks
+the stamped digests of the selected binary and the same manifest.
 See [release preparation](release/README.md).
 
 Local checks:
@@ -232,7 +234,7 @@ sh -n scripts/agent-firmware-install.sh
 sh -n tests/agent-firmware-install.sh
 go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 CGO_ENABLED=0 go build -trimpath -o /tmp/agent-firmware ./cmd/agent-firmware
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o /tmp/agent-firmware-linux-amd64 ./cmd/agent-firmware
+WORKLOAD_RELEASE=internal/workloadrelease/testdata/manifest.json sh scripts/build-release.sh v0.0.0 /tmp/agent-firmware-release
 ```
 
 Ordinary tests use local fake Unix sockets and never control the developer's Docker

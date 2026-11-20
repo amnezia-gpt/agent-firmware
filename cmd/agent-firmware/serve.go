@@ -304,6 +304,9 @@ func executeManaged(parent context.Context, store configuration.Store, manager *
 			return err
 		}
 		defer engine.Close()
+		if err := engine.Prerequisites(ctx); err != nil {
+			return err
+		}
 		result, err = workload.Apply(ctx, engine, session, stack)
 		if err != nil {
 			return err

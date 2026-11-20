@@ -12,6 +12,12 @@ fx=/run/af-bootstrap
 rm -rf "$fx"
 mkdir -p /run/systemd/system "$fx/assets"
 printf 'ID=ubuntu\nVERSION_ID="24.04"\n' > /etc/os-release
+case "$(uname -m)" in
+ x86_64) arch=amd64; other_arch=arm64 ;;
+ aarch64|arm64) arch=arm64; other_arch=amd64 ;;
+ *) echo 'unsupported test container architecture' >&2; exit 2 ;;
+esac
+asset=agent-firmware-linux-$arch
 
 stub() { cat > "/usr/bin/$1"; chmod 755 "/usr/bin/$1"; }
 stub systemctl <<'SH'
@@ -41,7 +47,7 @@ done
 cp "/run/af-bootstrap/assets/${url##*/}" "$out"
 SH
 
-cat > "$fx/assets/agent-firmware-linux-amd64" <<'SH'
+cat > "$fx/assets/$asset" <<'SH'
 #!/bin/sh
 printf 'firmware %s\n' "$*" >> /run/af-bootstrap/calls
 case "$1" in
@@ -67,10 +73,17 @@ done
 [ ! -f /run/af-bootstrap/install-fails ] || { printf '{"error_code":"configuration_rejected"}\n' >&2; exit 1; }
 printf '{"installed":true}\n'
 SH
+printf '%s\n' '#!/bin/sh' 'exit 2' > "$fx/assets/agent-firmware-linux-$other_arch"
 printf '{"release":true}\n' > "$fx/assets/workload-release.json"
-fsum=$(sha256sum "$fx/assets/agent-firmware-linux-amd64" | cut -d ' ' -f 1)
+fsum=$(sha256sum "$fx/assets/$asset" | cut -d ' ' -f 1)
+other_sum=$(sha256sum "$fx/assets/agent-firmware-linux-$other_arch" | cut -d ' ' -f 1)
 wsum=$(sha256sum "$fx/assets/workload-release.json" | cut -d ' ' -f 1)
-stamp() { sed -e "s/@@RELEASE_TAG@@/$1/" -e "s/@@FIRMWARE_SHA256@@/$2/" -e "s/@@WORKLOAD_RELEASE_SHA256@@/$3/" scripts/agent-firmware-install.sh > "$fx/bootstrap.sh"; }
+stamp() {
+ if [ "$arch" = amd64 ]; then amd64_sum=$2 arm64_sum=$other_sum
+ else amd64_sum=$other_sum arm64_sum=$2; fi
+ sed -e "s/@@RELEASE_TAG@@/$1/" -e "s/@@FIRMWARE_AMD64_SHA256@@/$amd64_sum/" -e "s/@@FIRMWARE_ARM64_SHA256@@/$arm64_sum/" \
+  -e "s/@@WORKLOAD_RELEASE_SHA256@@/$3/" scripts/agent-firmware-install.sh > "$fx/bootstrap.sh"
+}
 
 secret=enrc_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopq
 run() { : > "$fx/calls"; set +e; sh "$@" > "$fx/stdout" 2> "$fx/stderr" < /dev/null; code=$?; set -e; }
@@ -141,7 +154,7 @@ rm "$fx/apt-fails"; run "$fx/bootstrap.sh"
 [ "$code" = 0 ] || { echo "fresh install failed: $(cat "$fx/stderr")" >&2; exit 1; }
 grep -q 'install docker.io' "$fx/calls" && grep -q '^systemctl enable --now docker.service' "$fx/calls"
 installed
-grep -q 'releases/download/v0.1.0/agent-firmware-linux-amd64' "$fx/calls"
+grep -Eq "^curl .*download/v0\.1\.0/$asset$" "$fx/calls"
 # The owner sees what is happening, in order, on standard error.
 [ "$(cat "$fx/stderr")" = "agent-firmware-install: Downloading firmware v0.1.0
 agent-firmware-install: Checking the workload release
@@ -155,19 +168,20 @@ no_secret
 
 # Existing Docker is never modified: running is reused, stopped is refused.
 run "$fx/bootstrap.sh"; [ "$code" = 0 ]
+! grep -Eq "^curl .*download/v0\.1\.0/agent-firmware-linux-$other_arch$" "$fx/calls"
 ! grep -Eq '^(apt-get|systemctl enable)' "$fx/calls"
 rm "$fx/docker-active"; run "$fx/bootstrap.sh"; expect_error docker_not_running
 ! grep -Eq '^(apt-get|systemctl enable)' "$fx/calls"; not_installed
 touch "$fx/docker-active"
 
 # Tampered or missing assets stop before anything downloaded runs.
-for asset in agent-firmware-linux-amd64 workload-release.json; do
- cp -p "$fx/assets/$asset" "$fx/asset.keep"
- printf '# changed\n' >> "$fx/assets/$asset"
+for name in "$asset" workload-release.json; do
+ cp -p "$fx/assets/$name" "$fx/asset.keep"
+ printf '# changed\n' >> "$fx/assets/$name"
  run "$fx/bootstrap.sh"; expect_error artifact_digest_mismatch; ! grep -q '^firmware' "$fx/calls"
- rm "$fx/assets/$asset"
+ rm "$fx/assets/$name"
  run "$fx/bootstrap.sh"; expect_error download_failed; ! grep -q '^firmware' "$fx/calls"
- cp -p "$fx/asset.keep" "$fx/assets/$asset"
+ cp -p "$fx/asset.keep" "$fx/assets/$name"
 done
 
 # The firmware's own error is passed through once; the work directory is removed.
@@ -178,4 +192,8 @@ rm "$fx/install-fails"
 # A truncated script executes nothing.
 head -n 40 "$fx/bootstrap.sh" > "$fx/truncated.sh"
 run "$fx/truncated.sh"; [ "$code" != 0 ]; no_changes
+
+# The common script requires both firmware digests on either architecture.
+sed "s/^firmware_arm64_sha256=.*/firmware_arm64_sha256='unavailable'/" "$fx/bootstrap.sh" > "$fx/missing-arm64.sh"
+run "$fx/missing-arm64.sh"; expect_error unreleased_script; no_changes
 echo 'bootstrap tests passed'

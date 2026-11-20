@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/amnezia-gpt/agent-firmware/internal/host"
 	"github.com/amnezia-gpt/agent-firmware/internal/workload"
 	"github.com/amnezia-gpt/agent-firmware/internal/workloadrelease"
 	"github.com/containerd/errdefs"
@@ -29,6 +30,7 @@ type Engine struct {
 	transport   *http.Transport
 	callTimeout time.Duration
 	images      map[string]client.ImageInspectResult
+	platform    ocispec.Platform
 }
 type limitedBody struct {
 	io.ReadCloser
@@ -61,8 +63,11 @@ func (t boundedTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	response.Body = &limitedBody{response.Body, limit}
 	return response, nil
 }
-func New(socket string) (*Engine, error) { return newClient(socket, 15*time.Second) }
-func newClient(socket string, timeout time.Duration) (*Engine, error) {
+func New(socket string) (*Engine, error) {
+	return newEngine(socket, 15*time.Second, host.WorkloadPlatform())
+}
+
+func newEngine(socket string, timeout time.Duration, platform ocispec.Platform) (*Engine, error) {
 	dialer := &net.Dialer{Timeout: 3 * time.Second, KeepAlive: 30 * time.Second}
 	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return dialer.DialContext(ctx, "unix", socket)
@@ -72,7 +77,7 @@ func newClient(socket string, timeout time.Duration) (*Engine, error) {
 		transport.CloseIdleConnections()
 		return nil, workload.ErrEngine
 	}
-	return &Engine{api, transport, timeout, map[string]client.ImageInspectResult{}}, nil
+	return &Engine{api: api, transport: transport, callTimeout: timeout, images: map[string]client.ImageInspectResult{}, platform: platform}, nil
 }
 func (e *Engine) Close() { e.api.Close(); e.transport.CloseIdleConnections() }
 func classify(err error) error {
@@ -245,17 +250,11 @@ func (e *Engine) checkRetainedMount(ctx context.Context, stack workload.Stack, m
 
 func (e *Engine) Prepare(ctx context.Context, s workload.Stack) error {
 	for _, spec := range s.Specs {
-		image, ok := e.images[spec.Image]
-		if !ok {
-			var err error
-			image, err = e.prepareImage(ctx, spec.Image)
-			if err != nil {
-				return err
-			}
-			e.images[spec.Image] = image
+		image, err := e.prepareImage(ctx, spec.Image)
+		if err != nil {
+			return err
 		}
-		if image.Os != "linux" || image.Architecture != "amd64" || image.Config == nil ||
-			!validEffectiveUser(effectiveUser(spec, image.Config.User)) || image.Config.Healthcheck == nil ||
+		if !validEffectiveUser(effectiveUser(spec, image.Config.User)) || image.Config.Healthcheck == nil ||
 			len(image.Config.Healthcheck.Test) == 0 || image.Config.Healthcheck.Test[0] == "NONE" {
 			return workload.ErrConflict
 		}
@@ -275,48 +274,53 @@ func (e *Engine) Prepare(ctx context.Context, s workload.Stack) error {
 // creating or resolving any enrollment resources.
 func (e *Engine) PrepareImages(ctx context.Context, release workloadrelease.Release) error {
 	for _, name := range release.Order() {
-		reference := release.Services[name].Image.Reference()
-		if _, ok := e.images[reference]; ok {
-			continue
-		}
-		image, err := e.prepareImage(ctx, reference)
-		if err != nil {
+		if _, err := e.prepareImage(ctx, release.Services[name].Image.Reference()); err != nil {
 			return err
 		}
-		if image.Os != "linux" || image.Architecture != "amd64" || image.Config == nil {
-			return workload.ErrConflict
-		}
-		e.images[reference] = image
 	}
 	return nil
 }
 
 func (e *Engine) prepareImage(ctx context.Context, reference string) (client.ImageInspectResult, error) {
-	call, cancel := context.WithTimeout(ctx, e.callTimeout)
-	image, err := e.api.ImageInspect(call, reference)
-	cancel()
-	if !errdefs.IsNotFound(err) {
-		return image, classify(err)
+	if image, ok := e.images[reference]; ok {
+		return image, nil
 	}
+	image, err := e.inspectImage(ctx, reference)
+	if errdefs.IsNotFound(err) {
+		if err := e.pullImage(ctx, reference); err != nil {
+			return client.ImageInspectResult{}, err
+		}
+		image, err = e.inspectImage(ctx, reference)
+	}
+	if err != nil {
+		return client.ImageInspectResult{}, classify(err)
+	}
+	if image.Os != e.platform.OS || image.Architecture != e.platform.Architecture || image.Config == nil {
+		return client.ImageInspectResult{}, workload.ErrConflict
+	}
+	e.images[reference] = image
+	return image, nil
+}
 
+func (e *Engine) inspectImage(ctx context.Context, reference string) (client.ImageInspectResult, error) {
+	call, cancel := context.WithTimeout(ctx, e.callTimeout)
+	defer cancel()
+	// The engine's native platform is its default. Verify that platform from
+	// the response without requiring the API 1.49 inspect platform selector.
+	return e.api.ImageInspect(call, reference)
+}
+
+func (e *Engine) pullImage(ctx context.Context, reference string) error {
 	pull, stop := context.WithTimeout(ctx, 3*time.Minute)
 	defer stop()
 	stream, err := e.api.ImagePull(pull, reference, client.ImagePullOptions{
-		Platforms: []ocispec.Platform{{OS: "linux", Architecture: "amd64"}},
+		Platforms: []ocispec.Platform{e.platform},
 	})
 	if err != nil {
-		return client.ImageInspectResult{}, classify(err)
+		return classify(err)
 	}
-	err = stream.Wait(pull)
-	stream.Close()
-	if err != nil {
-		return client.ImageInspectResult{}, classify(err)
-	}
-
-	call, cancel = context.WithTimeout(ctx, e.callTimeout)
-	defer cancel()
-	image, err = e.api.ImageInspect(call, reference)
-	return image, classify(err)
+	defer stream.Close()
+	return classify(stream.Wait(pull))
 }
 
 func validEffectiveUser(user string) bool {
@@ -447,7 +451,7 @@ func (e *Engine) Create(ctx context.Context, s workload.Spec, op string) (worklo
 		environment = append(environment, k+"="+v)
 	}
 	slices.Sort(environment)
-	created, err := e.api.ContainerCreate(ctx, client.ContainerCreateOptions{Name: s.Name, Platform: &ocispec.Platform{OS: "linux", Architecture: "amd64"},
+	created, err := e.api.ContainerCreate(ctx, client.ContainerCreateOptions{Name: s.Name, Platform: &e.platform,
 		Config:           &container.Config{Image: s.Image, User: s.User, Env: environment, Labels: values, StopTimeout: &s.StopSeconds, Healthcheck: &container.HealthConfig{Interval: 10 * time.Second, Timeout: 5 * time.Second, Retries: 3, StartPeriod: time.Duration(s.HealthStart) * time.Second}},
 		HostConfig:       &container.HostConfig{NetworkMode: container.NetworkMode(s.Network), RestartPolicy: container.RestartPolicy{Name: "unless-stopped"}, ReadonlyRootfs: s.ReadOnly, CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges:true"}, Tmpfs: map[string]string{"/tmp": "rw,noexec,nosuid,nodev"}, Mounts: mounts},
 		NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{s.Network: {Aliases: s.Aliases}}}})

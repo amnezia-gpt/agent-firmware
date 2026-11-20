@@ -37,6 +37,8 @@ const (
 	ErrUserVolumeMissing  Error = "held_user_data_not_declared"
 )
 
+const ErrEnginePrerequisites Error = "unsupported_docker_prerequisites"
+
 type Mount struct {
 	Name, Target string
 	ReadOnly     bool

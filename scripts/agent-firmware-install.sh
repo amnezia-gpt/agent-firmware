@@ -7,13 +7,14 @@
 #   sh agent-firmware-install.sh
 #   sh agent-firmware-install.sh --decommission --confirm [--delete-data]
 #
-# The release pipeline replaces the three placeholders below. An unstamped
+# The release pipeline stamps the tag and digests below. An unstamped
 # copy refuses to run. The whole body is one function called on the last
 # line, so a truncated download executes nothing.
 set -eu
 
 release_tag='@@RELEASE_TAG@@'
-firmware_sha256='@@FIRMWARE_SHA256@@'
+firmware_amd64_sha256='@@FIRMWARE_AMD64_SHA256@@'
+firmware_arm64_sha256='@@FIRMWARE_ARM64_SHA256@@'
 workload_sha256='@@WORKLOAD_RELEASE_SHA256@@'
 
 main() {
@@ -79,10 +80,14 @@ HELP
   *) die unreleased_script ;;
  esac
  case "$release_tag" in *[!0-9A-Za-z.+-]*) die unreleased_script ;; esac
- is_digest "$firmware_sha256" && is_digest "$workload_sha256" || die unreleased_script
+ is_digest "$firmware_amd64_sha256" && is_digest "$firmware_arm64_sha256" && is_digest "$workload_sha256" || die unreleased_script
 
  [ "$(id -u)" = 0 ] && [ "$(id -g)" = 0 ] || die root_required
- [ "$(uname -s)" = Linux ] && [ "$(uname -m)" = x86_64 ] || die unsupported_system
+ case "$(uname -s)/$(uname -m)" in
+  Linux/x86_64) firmware_asset=agent-firmware-linux-amd64; firmware_sha256=$firmware_amd64_sha256 ;;
+  Linux/aarch64|Linux/arm64) firmware_asset=agent-firmware-linux-arm64; firmware_sha256=$firmware_arm64_sha256 ;;
+  *) die unsupported_system ;;
+ esac
  [ -f /etc/os-release ] || die unsupported_system
  grep -Eq '^ID=("ubuntu"|ubuntu)$' /etc/os-release && grep -Eq '^VERSION_ID=("24\.04"|24\.04)$' /etc/os-release || die unsupported_system
  [ -d /run/systemd/system ] || die unsupported_system
@@ -104,8 +109,8 @@ HELP
   [ "$(sha256sum "$workdir/$1" | cut -d ' ' -f 1)" = "$2" ] || die artifact_digest_mismatch
  }
  say "Downloading firmware $release_tag"
- fetch agent-firmware-linux-amd64 "$firmware_sha256" 67108864
- firmware=$workdir/agent-firmware-linux-amd64
+ fetch "$firmware_asset" "$firmware_sha256" 67108864
+ firmware=$workdir/$firmware_asset
  chmod 700 "$firmware" || die bootstrap_write_failed
  if [ "$decommission" = true ]; then
   reported=true

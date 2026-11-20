@@ -27,6 +27,36 @@ func fixture(t *testing.T, path string) []byte {
 	return raw
 }
 
+func TestValidateReleaseChecksExplicitBuildTarget(t *testing.T) {
+	enableTestRelease(t)
+	amd64Only := filepath.Join(t.TempDir(), "amd64.json")
+	var manifest map[string]json.RawMessage
+	if err := json.Unmarshal(fixture(t, manifestFixture), &manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifest["platforms"] = json.RawMessage(`["linux/amd64"]`)
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(amd64Only, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		path, platform, diagnostic string
+	}{
+		{manifestFixture, "linux/arm64", ""},
+		{amd64Only, "linux/amd64", ""},
+		{amd64Only, "linux/arm64", "{\"error_code\":\"unsupported_workload_platform\"}\n"},
+	} {
+		var out, stderr bytes.Buffer
+		code := run([]string{"validate-release", "--release", test.path, "--platform", test.platform}, nil, &out, &stderr)
+		if (code == 0) != (test.diagnostic == "") || stderr.String() != test.diagnostic {
+			t.Errorf("%s on %s: %d %q %q", test.path, test.platform, code, &out, &stderr)
+		}
+	}
+}
+
 func TestInstallCommand(t *testing.T) {
 	enableTestRelease(t)
 	originalDir, originalDiscover, originalReady, originalPlace := defaultStateDir, discover, hostReady, place
