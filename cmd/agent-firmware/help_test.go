@@ -46,9 +46,9 @@ Device lifecycle, in order:
   enroll         Join a domain and start the workloads
   status         Show the device, its enrollment and kept user data
   update         Install the latest firmware release
-  unenroll       Leave the domain; user data is kept unless --delete-data
-  decommission   Remove the device and the firmware; user data is kept
-                 unless --delete-data
+  unenroll       Leave the domain; delete user data with --delete-data
+  decommission   Remove the device and the firmware
+                 Delete user data with --delete-data
 
 Checks that change nothing:
   discover-profile   Assemble a domain's backend profile from its metadata

@@ -46,9 +46,20 @@ firmware runs the same workload release (`linux/arm64` images) through the conta
 7. **No Apple Developer ID.** The binary carries the Go linker's ad-hoc signature, and `curl` sets no quarantine
    attribute, so Gatekeeper does not assess it. A `.pkg`, an app bundle, a Homebrew cask, `SMAppService` or a
    Keychain ACL would need Developer ID signing and notarization, and each needs a separate decision.
-8. **User data lives in the engine's VM disk.** Resetting or uninstalling Docker Desktop, purging its data or
-   switching engines deletes the user-data volumes. This is accepted for now: the installer states it plainly
-   before it changes anything. Export or backup is separate work.
+8. **User data lives in the engine's VM disk.** Resetting or uninstalling Docker Desktop or purging its data
+   can delete the user-data volumes. Switching engines makes them unavailable to the new engine. The installer
+   warns before placement. No export or backup is planned (owner, 2026-11-21).
+
+## Owner Decision: user data on macOS (2026-11-21)
+
+On macOS the firmware warns and does nothing more. There will be no backup or export of user data and no storage
+outside the engine. A person who needs their threads and files to last is directed to a cloud Linux machine,
+where the volumes are on the host's disk.
+
+- The firmware leaves user-data volumes untouched by default. Explicit `--delete-data` still authorizes deletion.
+- [x] The installation warning and README explain deletion risks of resetting, clearing or uninstalling Docker
+  Desktop, loss of access when switching engines, and the cloud Linux option for data that must persist.
+- Point 8 of the accepted direction no longer names export or backup as later work.
 
 ## Scope
 
@@ -75,7 +86,7 @@ Out of scope: Intel Macs, Windows, a Developer ID–signed distribution, Keychai
 - [ ] Decommission removes the LaunchAgent, the firmware and its state; `--delete-data` also removes the user-data
   volumes.
 - [ ] The installer shows the user-data notice before it changes anything.
-- [ ] The release publishes the `darwin-arm64` binary, and the bootstrap script verifies its digest.
+- [x] The release publishes the `darwin-arm64` binary, and the bootstrap script verifies its digest.
 
 ## Verification
 
@@ -84,8 +95,10 @@ build and unit tests only. Full-stack acceptance is a manual run on an Apple Sil
 
 A native test install, socket outage and recovery, and decommission passed with real launchd and a disposable
 Docker API fixture. A read-only preflight also passed against Docker Desktop. See [PLAN.md](PLAN.md) for scope.
+Firmware v0.6.0 published `agent-firmware-darwin-arm64`. The downloaded asset passed `codesign --verify` and
+matched the SHA-256 embedded in the published bootstrap. The bootstrap fixture rejects a tampered Mac asset.
+`TestMacOSInstallWarnsAboutUserDataBeforePlacingFirmware` verifies the warning at the placement boundary.
 
 ## Next Action
 
-Publish the Apple Silicon binary with the existing Linux targets after CI. Verify full-stack installation, login,
-sleep and wake, Docker Desktop restart and removal with test-owned data.
+Verify full-stack installation, login, sleep and wake, Docker Desktop restart and removal with test-owned data.

@@ -5,6 +5,7 @@
 # done by the verified firmware binary: device state, the service and rollback.
 #
 #   sh agent-firmware-install.sh
+#   sh agent-firmware-install.sh --issuer <url> --enrollment-code-stdin
 #   sh agent-firmware-install.sh --decommission --confirm [--delete-data]
 #
 # The release pipeline stamps the tag and digests below. An unstamped
@@ -21,14 +22,19 @@ workload_sha256='@@WORKLOAD_RELEASE_SHA256@@'
 main() {
  if [ "$#" = 1 ] && { [ "$1" = --help ] || [ "$1" = -h ]; }; then
   /bin/cat <<'HELP'
-agent-firmware-install.sh [--decommission --confirm [--delete-data]]
+Usage: sh agent-firmware-install.sh
+       sh agent-firmware-install.sh --issuer <url> --enrollment-code-stdin
+       sh agent-firmware-install.sh --decommission --confirm [--delete-data]
 
 Without arguments: verify and install the current firmware release, or
-update an installed one. The firmware then does everything else:
-  agent-firmware help
+update an installed one. On Linux the script asks sudo for root access.
+
+--issuer <url> --enrollment-code-stdin
+    Install or update, then pass standard input to the installed firmware's
+    enrollment command. Supply the one-time code on standard input.
 
 --decommission --confirm
-    Remove the device and the firmware from this host. User data is kept.
+    Remove the device and firmware. Leave user-data volumes untouched.
 --decommission --confirm --delete-data
     Also remove the user data of every domain on this host. Use this form to
     clear an earlier installation before reinstalling. This cannot be undone.
@@ -52,12 +58,13 @@ HELP
   status=$?
   trap - EXIT HUP INT TERM
   if [ "$status" != 0 ] && [ "$reported" != true ]; then
-   if [ "$error_code" = invalid_usage ]; then
-    printf '%s\n' 'agent-firmware-install: run with --help for usage' >&2
-   fi
+   case "$error_code" in
+    invalid_usage) printf '%s\n' 'agent-firmware-install: run with --help for usage' >&2 ;;
+    root_required) say 'Run from a terminal where sudo can prompt, or run the same command as root.' ;;
+   esac
    printf '{"error_code":"%s"}\n' "$error_code" >&2
   fi
-  if [ -n "$workdir" ]; then rm -rf -- "$workdir"; fi
+  if [ -n "$workdir" ]; then rm -rf -- "$workdir" </dev/null; fi
   [ "$status" = 0 ] || status=1
   exit "$status"
  }
@@ -65,9 +72,12 @@ HELP
  trap 'error_code=bootstrap_interrupted; exit 1' HUP INT TERM
 
  decommission=false
- case "$#" in
-  0) : ;;
-  2|3) [ "$1" = --decommission ] && [ "$2" = --confirm ] || die invalid_usage
+ issuer=
+ case "$#/${1:-}" in
+  0/) : ;;
+  3/--issuer) [ -n "$2" ] && [ "$3" = --enrollment-code-stdin ] || die invalid_usage
+              issuer=$2 ;;
+  2/--decommission|3/--decommission) [ "$2" = --confirm ] || die invalid_usage
        if [ "$#" = 3 ]; then [ "$3" = --delete-data ] || die invalid_usage; fi
        decommission=true ;;
   *) die invalid_usage ;;
@@ -85,28 +95,47 @@ HELP
  is_digest "$firmware_amd64_sha256" && is_digest "$firmware_arm64_sha256" \
   && is_digest "$firmware_darwin_arm64_sha256" && is_digest "$workload_sha256" || die unreleased_script
 
- os=$(uname -s)
- if [ "$os" = Linux ]; then
-  [ "$(id -u)" = 0 ] && [ "$(id -g)" = 0 ] || die root_required
- fi
- case "$os/$(uname -m)" in
+ os=$(uname -s </dev/null)
+ case "$os/$(uname -m </dev/null)" in
   Linux/x86_64) firmware_asset=agent-firmware-linux-amd64; firmware_sha256=$firmware_amd64_sha256 ;;
   Linux/aarch64|Linux/arm64) firmware_asset=agent-firmware-linux-arm64; firmware_sha256=$firmware_arm64_sha256 ;;
   Darwin/arm64) firmware_asset=agent-firmware-darwin-arm64; firmware_sha256=$firmware_darwin_arm64_sha256 ;;
   *) die unsupported_system ;;
  esac
+ firmware_path=$PATH
  if [ "$os" = Darwin ]; then
-  [ "$(id -u)" != 0 ] || die root_forbidden
-  version=$(sw_vers -productVersion) || die unsupported_macos_version
+  [ "$(id -u </dev/null)" != 0 ] || die root_forbidden
+  version=$(sw_vers -productVersion </dev/null) || die unsupported_macos_version
   major=${version%%.*}
   case "$major" in ''|*[!0-9]*) die unsupported_macos_version ;; esac
   [ "$major" -ge 15 ] || die unsupported_macos_version
   platform_tools=shasum
   work_parent=${TMPDIR:-/tmp}
+  firmware_path=$caller_path
  else
   [ -f /etc/os-release ] || die unsupported_system
-  grep -Eq '^ID=("ubuntu"|ubuntu)$' /etc/os-release && grep -Eq '^VERSION_ID=("24\.04"|24\.04)$' /etc/os-release || die unsupported_system
+  grep -Eq '^ID=("ubuntu"|ubuntu)$' /etc/os-release </dev/null \
+   && grep -Eq '^VERSION_ID=("24\.04"|24\.04)$' /etc/os-release </dev/null || die unsupported_system
   [ -d /run/systemd/system ] || die unsupported_system
+  if [ "$(id -u </dev/null)" != 0 ] || [ "$(id -g </dev/null)" != 0 ]; then
+   command -v sudo >/dev/null 2>&1 || die root_required
+   case "$0" in /*) script=$0 ;; *) script=$(pwd -P)/$0 ;; esac
+   [ -r "$script" ] && [ -f "$script" ] || die root_required
+   say 'Linux setup requires root, asking sudo'
+   # The launcher checks privileges before re-entry. Exit 42 means that the
+   # child already reported its own error. Sudo keeps the pipe on stdin and
+   # uses the terminal for authentication.
+   if sudo -- /bin/sh -c '
+    [ "$(/usr/bin/id -u </dev/null)" = 0 ] && [ "$(/usr/bin/id -g </dev/null)" = 0 ] || exit 1
+    /bin/sh "$@" || exit 42
+   ' agent-firmware-sudo "$script" "$@"; then
+    return
+   else
+    [ "$?" = 42 ] || die root_required
+    reported=true
+    exit 1
+   fi
+  fi
   platform_tools='sha256sum timeout'
   work_parent=/usr/local/lib
  fi
@@ -117,7 +146,7 @@ HELP
  # The work directory must allow execution: /run is mounted noexec on Ubuntu,
  # so it lives beside the place the firmware is installed to. It is private
  # (umask 077), holds no secret and is removed on exit.
- workdir=$(mktemp -d "${work_parent%/}/agent-firmware-bootstrap.XXXXXXXX") || die bootstrap_write_failed
+ workdir=$(mktemp -d "${work_parent%/}/agent-firmware-bootstrap.XXXXXXXX" </dev/null) || die bootstrap_write_failed
  base_url=https://github.com/amnezia-gpt/agent-firmware/releases/download/$release_tag
  fetch() {
   # $1 asset name, $2 expected sha256, $3 size cap in bytes
@@ -135,58 +164,63 @@ HELP
   [ "${checksum%% *}" = "$2" ] || die artifact_digest_mismatch
  }
  say "Downloading firmware $release_tag"
- fetch "$firmware_asset" "$firmware_sha256" 67108864
+ fetch "$firmware_asset" "$firmware_sha256" 67108864 </dev/null
  firmware=$workdir/$firmware_asset
- chmod 700 "$firmware" || die bootstrap_write_failed
+ chmod 700 "$firmware" </dev/null || die bootstrap_write_failed
  if [ "$decommission" = true ]; then
   reported=true
   shift
-  if [ "$os" = Darwin ]; then PATH=$caller_path "$firmware" decommission "$@" </dev/null
-  else "$firmware" decommission "$@" </dev/null; fi
+  PATH=$firmware_path "$firmware" decommission "$@" </dev/null
   return
  fi
 
- fetch workload-release.json "$workload_sha256" 65536
+ fetch workload-release.json "$workload_sha256" 65536 </dev/null
 
  # The firmware checks the release before Docker is changed and
  # reports its own error code; do not print a second one.
  say "Checking the workload release"
- status=0
- if [ "$os" = Darwin ]; then
-  # The firmware validates the manifest and preflights the user's Docker context.
-  reported=true
-  PATH=$caller_path "$firmware" install --release "$workdir/workload-release.json" </dev/null
+ if [ "$os" = Linux ]; then
+  status=0
+  timeout 90s "$firmware" validate-release --release "$workdir/workload-release.json" \
+   </dev/null >/dev/null || status=$?
+  [ "$status" != 124 ] || die installation_check_timeout
+  if [ "$status" != 0 ]; then
+   reported=true
+   exit 1
+  fi
+
+  # Keep an existing engine. Install a missing one from the Ubuntu archive.
+  if command -v docker >/dev/null 2>&1; then
+   timeout 10s systemctl is-active --quiet docker.service </dev/null || die docker_not_running
+   say "Docker is already installed"
+  else
+   say "Installing Docker from the Ubuntu archive, this can take a few minutes"
+   DEBIAN_FRONTEND=noninteractive
+   export DEBIAN_FRONTEND
+   timeout 600s apt-get -o DPkg::Lock::Timeout=120 -qq update </dev/null >/dev/null 2>&1 || die docker_install_failed
+   timeout 1200s apt-get -o DPkg::Lock::Timeout=120 -qq -y install docker.io </dev/null >/dev/null 2>&1 || die docker_install_failed
+   timeout 120s systemctl enable --now docker.service </dev/null >/dev/null 2>&1 || die docker_install_failed
+   timeout 10s systemctl is-active --quiet docker.service </dev/null || die docker_install_failed
+  fi
+ fi
+
+ reported=true
+ if [ -z "$issuer" ]; then
+  PATH=$firmware_path "$firmware" install --release "$workdir/workload-release.json" </dev/null
   return
  fi
- timeout 90s "$firmware" validate-release --release "$workdir/workload-release.json" \
-  </dev/null >/dev/null || status=$?
- [ "$status" != 124 ] || die installation_check_timeout
- if [ "$status" != 0 ]; then
-  reported=true
-  exit 1
- fi
 
- # Docker: an existing engine is never modified; a missing one comes from the
- # distribution's signed archive, not from a remote convenience script.
- if command -v docker >/dev/null 2>&1; then
-  timeout 10s systemctl is-active --quiet docker.service </dev/null || die docker_not_running
-  say "Docker is already installed"
- else
-  say "Installing Docker from the Ubuntu archive, this can take a few minutes"
-  DEBIAN_FRONTEND=noninteractive
-  export DEBIAN_FRONTEND
-  timeout 600s apt-get -o DPkg::Lock::Timeout=120 -qq update </dev/null >/dev/null 2>&1 || die docker_install_failed
-  timeout 1200s apt-get -o DPkg::Lock::Timeout=120 -qq -y install docker.io </dev/null >/dev/null 2>&1 || die docker_install_failed
-  timeout 120s systemctl enable --now docker.service </dev/null >/dev/null 2>&1 || die docker_install_failed
-  timeout 10s systemctl is-active --quiet docker.service </dev/null || die docker_install_failed
+ PATH=$firmware_path "$firmware" install --release "$workdir/workload-release.json" </dev/null >/dev/null
+ reported=false
+ installed=/usr/local/bin/agent-firmware
+ if [ "$os" = Darwin ]; then
+  installed="${HOME:-}/Library/Application Support/agent-firmware/agent-firmware"
  fi
-
- status=0
- "$firmware" install --release "$workdir/workload-release.json" </dev/null || status=$?
- if [ "$status" != 0 ]; then
-  reported=true
-  exit 1
- fi
+ [ -x "$installed" ] || die enrollment_executable_missing
+ rm -rf -- "$workdir" </dev/null || die bootstrap_cleanup_failed
+ workdir=
+ reported=true
+ PATH=$firmware_path exec "$installed" enroll --issuer "$issuer" --enrollment-code-stdin
 }
 
 main "$@"

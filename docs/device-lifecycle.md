@@ -80,6 +80,11 @@ domain, the operational keys and the owner's data stay.
 
 ## Stages
 
+The stage numbers describe responsibilities. Owner authorization (stage 2) can
+precede manufacture (stage 1), as it does when the owner starts from the domain's
+page. The code's lifetime, set by the domain, has to cover manufacture in that
+flow. If it expires, repeat only enrollment (stage 3) with a new code.
+
 ### 0. Release
 
 - **Actor:** vendor.
@@ -165,11 +170,9 @@ domain, the operational keys and the owner's data stay.
 ### 6. Leaving a domain
 
 - **Actor:** the owner or the server.
-- **Command:** `sudo agent-firmware unenroll --confirm`. Add `--delete-data`
-  to erase user data of the current domain.
 - **Actions:** attempt deregistration, then remove operational keys, workload
-  resources and enrollment volumes. Retained user data belongs to its original
-  domain.
+  resources and enrollment volumes. The owner can request deletion of user data
+  for the current domain. Retained user data belongs to its original domain.
 - **Result:** state `manufactured`. Enrolling in the same domain attaches kept
   data. Enrolling in another domain gives the device another LDevID and uses
   that domain's volumes.
@@ -177,21 +180,15 @@ domain, the operational keys and the owner's data stay.
 ### 7. Decommissioning
 
 - **Actor:** the owner.
-- **Command:** `sudo agent-firmware decommission --confirm`. If the binary was
-  removed during an interrupted cleanup, resume with
-  `sudo sh agent-firmware-install.sh --decommission --confirm` and the same
-  data deletion flag as the original invocation. To clear an earlier
-  installation for reinstalling, run
-  `sudo sh agent-firmware-install.sh --decommission --confirm --delete-data`.
 - **Actions:** attempt deregistration of the current enrollment, then remove
   operational keys, enrollment volumes, root secret, IDevID and firmware.
   Remove unused workload images by digest when the release is readable.
   The earlier layout supports local removal and reports `not_attempted`.
 - **Result:** state `decommissioned`. User data stays by default and can be
-  attached after reinstalling and enrolling in its domain. Add `--delete-data`
-  to erase firmware volumes of every domain, even after firmware removal.
-  Domain deregistration is reported separately from local completion. Repeat
-  the confirmed command with the same flags to resume interrupted cleanup.
+  attached after reinstalling and enrolling in its domain. The owner can request
+  deletion of firmware volumes for every domain, even after firmware removal.
+  Domain deregistration is reported separately from local completion. Resume an
+  interrupted removal with the original data deletion intent.
 
 ## What belongs to each lifecycle
 
@@ -212,8 +209,9 @@ domain, the operational keys and the owner's data stay.
    the IDevID, the binding to the domain or the owner's data.
 6. Every stage can be repeated; a failed stage does not destroy the result of
    the stages before it.
-7. An enrollment code is used once, arrives only as the input of stage 3 or 3a
-   and is not kept after it.
+7. An enrollment code is used once and is consumed only by stage 3 or 3a. A delivery
+   tool may carry it to that stage without reading or keeping it. Stage 1 does not
+   consume it: a failed manufacture leaves the code unspent.
 8. An update preserves identity and user data. It refuses a release that drops,
    renames or reclasses held user data. Workloads own the data format and must
    keep it readable across firmware reinstall and workload rollback.

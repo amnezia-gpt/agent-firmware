@@ -318,3 +318,15 @@ func TestEnrollmentRefusalHintsPrecedeJSON(t *testing.T) {
 		}
 	}
 }
+
+func TestEnrollmentFailureOffersRetryWithExistingInstallation(t *testing.T) {
+	for _, failure := range []error{errEnrollmentFailed, errEnrollmentTimeout} {
+		var stderr bytes.Buffer
+		want := "agent-firmware: If the enrollment code expired, get a fresh code from your device page.\n" +
+			"agent-firmware: Retry only the enroll command on the installed firmware.\n" +
+			`{"error_code":"` + failure.Error() + `"}` + "\n"
+		if report(&stderr, failure.Error(), 1) != 1 || stderr.String() != want {
+			t.Fatalf("unexpected enrollment diagnostic: %q", &stderr)
+		}
+	}
+}
