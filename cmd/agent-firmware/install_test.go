@@ -59,10 +59,11 @@ func TestValidateReleaseChecksExplicitBuildTarget(t *testing.T) {
 
 func TestInstallCommand(t *testing.T) {
 	enableTestRelease(t)
-	originalDir, originalDiscover, originalReady, originalPlace := defaultStateDir, discover, hostReady, place
+	originalLayout, originalDir, originalDiscover, originalReady, originalPlace := hostLayout, defaultStateDir, discover, hostReady, place
 	t.Cleanup(func() {
-		defaultStateDir, discover, hostReady, place = originalDir, originalDiscover, originalReady, originalPlace
+		hostLayout, defaultStateDir, discover, hostReady, place = originalLayout, originalDir, originalDiscover, originalReady, originalPlace
 	})
+	hostLayout.UserService = false
 	defaultStateDir = filepath.Join(t.TempDir(), "state")
 	ready, placed := "", 0
 	hostReady = func() string { return ready }
@@ -112,6 +113,32 @@ func TestInstallCommand(t *testing.T) {
 				t.Fatalf("stdout=%q stderr=%q placed=%d", &output, &errors, placed)
 			}
 		})
+	}
+}
+
+func TestMacOSInstallWarnsAboutUserDataBeforePlacingFirmware(t *testing.T) {
+	enableTestRelease(t)
+	originalLayout, originalDir, originalReady, originalPlace := hostLayout, defaultStateDir, hostReady, place
+	t.Cleanup(func() {
+		hostLayout, defaultStateDir, hostReady, place = originalLayout, originalDir, originalReady, originalPlace
+	})
+	hostLayout.UserService = true
+	defaultStateDir = filepath.Join(t.TempDir(), "state")
+	hostReady = func() string { return "" }
+	var stdout, stderr bytes.Buffer
+	placed := false
+	place = func(context.Context, *configuration.Device, func(string)) error {
+		for _, detail := range []string{"Docker Desktop's VM", "untouched by default", "Resetting Docker Desktop",
+			"clearing its data", "uninstalling it", "Switching engines makes these volumes unavailable", "cloud Linux machine"} {
+			if !strings.Contains(stderr.String(), detail) {
+				t.Errorf("missing warning before firmware placement: %q", detail)
+			}
+		}
+		placed = true
+		return nil
+	}
+	if code := run([]string{"install", "--release", manifestFixture}, unreadableStdin{t}, &stdout, &stderr); code != 0 || !placed {
+		t.Fatalf("install exit %d, placed %t, stderr %q", code, placed, &stderr)
 	}
 }
 
@@ -248,7 +275,7 @@ agent-firmware:   curl -fsSLo agent-firmware-install.sh https://github.com/amnez
 `
 	var out, stderr bytes.Buffer
 	if code := run([]string{"install", "--release", manifestFixture}, unreadableStdin{t}, &out, &stderr); code != 1 ||
-		out.Len() != 0 || stderr.String() != operatorText(want) {
+		out.Len() != 0 || !strings.HasSuffix(stderr.String(), operatorText(want)) {
 		t.Fatalf("retained volumes: %d %q %q", code, &out, &stderr)
 	}
 }

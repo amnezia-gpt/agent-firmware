@@ -72,11 +72,12 @@ Requires: Root and an installed device.
 Example: sudo agent-firmware update
 `, nil, noInput(runUpdate)},
 	{"unenroll", lifecycleCommands, "unenroll --confirm [--delete-data]",
-		"Leave the domain; user data is kept unless --delete-data", `Leave the current domain, with an attempt to deregister the device first.
+		"Leave the domain; delete user data with --delete-data", `Leave the current domain, with an attempt to deregister the device first.
 
 Changes: Removes containers, the network, enrollment volumes, operational
 keys and enrollment records. --delete-data also erases this domain's user data.
-Keeps: The IDevID and other domains' data. By default, keeps this domain's data.
+Keeps: The IDevID. The firmware leaves user-data volumes untouched by default.
+--delete-data only affects this domain's data.
 Requires: Root and --confirm.
 Without confirmation the command prints usage.
 Example: sudo agent-firmware unenroll --confirm
@@ -84,14 +85,14 @@ Example: sudo agent-firmware unenroll --confirm
 Data removed with --delete-data cannot be recovered.
 `, map[string]bool{"--confirm": false, "--delete-data": false}, noInput(runUnenroll)},
 	{"decommission", lifecycleCommands, "decommission --confirm [--delete-data]",
-		"Remove the device and the firmware; user data is kept\nunless --delete-data", `Remove the device and the installed firmware. If the binary is unavailable,
+		"Remove the device and the firmware\nDelete user data with --delete-data", `Remove the device and the installed firmware. If the binary is unavailable,
 run the downloaded agent-firmware-install.sh:
   sudo sh agent-firmware-install.sh --decommission --confirm
 
 Changes: Ends the enrollment and removes its resources, the device identity,
 root secret, state, service and binaries. --delete-data also erases user data
 of every domain on this host.
-Keeps: Docker and, by default, user data.
+Keeps: Docker. The firmware leaves user-data volumes untouched by default.
 An earlier installation's unclassified volumes also stay by default.
 Those volumes cannot be attached and block a later install. To erase all
 firmware volumes before reinstalling an earlier installation, run:

@@ -117,7 +117,6 @@ var (
 			if err := checkEngine(ctx, address); err != nil {
 				return err
 			}
-			progress("User data is kept in Docker Desktop's VM. Resetting or removing its data can delete these volumes. Switching engines makes the volumes unavailable.")
 			store.EngineSocket = address
 		}
 		return installer.Install(ctx, installer.Request{
@@ -156,6 +155,11 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 	defer cancel()
 	progress := func(message string) {
 		_, _ = io.WriteString(stderr, "agent-firmware: "+message+"\n")
+	}
+	if hostLayout.UserService {
+		progress("User-data volumes live in Docker Desktop's VM. The firmware leaves them untouched by default.")
+		progress("Resetting Docker Desktop, clearing its data, or uninstalling it can delete the volumes.")
+		progress("Switching engines makes these volumes unavailable. Use a cloud Linux machine for data that must persist.")
 	}
 	if err := place(ctx, device, progress); err != nil {
 		return report(stderr, err.Error(), 1)

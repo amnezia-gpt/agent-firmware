@@ -10,7 +10,7 @@ set -eu
 cd /work
 fx=/run/af-bootstrap
 rm -rf "$fx"
-mkdir -p /run/systemd/system "$fx/assets"
+mkdir -p /run/systemd/system "$fx/assets" /usr/local/bin
 printf 'ID=ubuntu\nVERSION_ID="24.04"\n' > /etc/os-release
 case "$(uname -m)" in
  x86_64) arch=amd64; other_arch=arm64 ;;
@@ -22,6 +22,8 @@ asset=agent-firmware-linux-$arch
 stub() { cat > "/usr/bin/$1"; chmod 755 "/usr/bin/$1"; }
 stub systemctl <<'SH'
 #!/bin/sh
+[ -z "$(cat)" ] || exit 2
+env >> /run/af-bootstrap/environments
 printf 'systemctl %s\n' "$*" >> /run/af-bootstrap/calls
 case "$1" in
  is-active) test -f /run/af-bootstrap/docker-active ;;
@@ -31,12 +33,16 @@ esac
 SH
 stub apt-get <<'SH'
 #!/bin/sh
+[ -z "$(cat)" ] || exit 2
+env >> /run/af-bootstrap/environments
 printf 'apt-get %s\n' "$*" >> /run/af-bootstrap/calls
 [ ! -f /run/af-bootstrap/apt-fails ] || exit 1
 case "$*" in *"install docker.io"*) printf '#!/bin/sh\n' > /usr/bin/docker; chmod 755 /usr/bin/docker ;; esac
 SH
 stub curl <<'SH'
 #!/bin/sh
+[ -z "$(cat)" ] || exit 2
+env >> /run/af-bootstrap/environments
 printf 'curl %s\n' "$*" >> /run/af-bootstrap/calls
 out= url=
 while [ "$#" -gt 0 ]; do
@@ -49,6 +55,7 @@ SH
 
 cat > "$fx/assets/$asset" <<'SH'
 #!/bin/sh
+env >> /run/af-bootstrap/environments
 printf 'firmware %s\n' "$*" >> /run/af-bootstrap/calls
 case "$1" in
  decommission)
@@ -73,6 +80,26 @@ done
 [ ! -f /run/af-bootstrap/install-fails ] || { printf '{"error_code":"configuration_rejected"}\n' >&2; exit 1; }
 printf '{"installed":true}\n'
 SH
+cat > /usr/local/bin/agent-firmware <<'SH'
+#!/bin/sh
+printf 'installed %s %s\n' "$0" "$*" >> /run/af-bootstrap/calls
+env >> /run/af-bootstrap/environments
+[ "$#" = 4 ] && [ "$1" = enroll ] && [ "$2" = --issuer ] \
+ && [ "$3" = https://auth.example.test ] && [ "$4" = --enrollment-code-stdin ] || exit 2
+cat > /run/af-bootstrap/enrolled-input
+if [ -f /run/af-bootstrap/enroll-fails ]; then
+ case "$(cat /run/af-bootstrap/enroll-fails)" in
+  expired) printf '%s\n' 'agent-firmware: If the enrollment code expired, get a fresh code from your device page.' \
+    'agent-firmware: Retry only the enroll command on the installed firmware.' '{"error_code":"enrollment_failed"}' >&2 ;;
+  already_enrolled) printf '%s\n' 'agent-firmware: The device is enrolled and working. The code was not used.' \
+    '{"error_code":"already_enrolled"}' >&2 ;;
+  *) exit 2 ;;
+ esac
+ exit 1
+fi
+printf '{"enrollment":"created"}\n'
+SH
+chmod 755 /usr/local/bin/agent-firmware
 printf '%s\n' '#!/bin/sh' 'exit 2' > "$fx/assets/agent-firmware-linux-$other_arch"
 cp "$fx/assets/$asset" "$fx/assets/agent-firmware-darwin-arm64"
 printf '%s\n' '# darwin fixture' >> "$fx/assets/agent-firmware-darwin-arm64"
@@ -90,18 +117,29 @@ stamp() {
 }
 
 secret=enrc_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopq
-run() { : > "$fx/calls"; set +e; sh "$@" > "$fx/stdout" 2> "$fx/stderr" < /dev/null; code=$?; set -e; }
-run_piped() { value=$1; shift; : > "$fx/calls"; set +e; printf '%s' "$value" | sh "$@" > "$fx/stdout" 2> "$fx/stderr"; code=$?; set -e; }
+begin_trial() { : > "$fx/calls"; : > "$fx/environments"; rm -f "$fx/enrolled-input"; }
+run() { begin_trial; set +e; sh "$@" > "$fx/stdout" 2> "$fx/stderr" < /dev/null; code=$?; set -e; }
+run_piped() { value=$1; shift; begin_trial; set +e; printf '%s' "$value" | sh "$@" > "$fx/stdout" 2> "$fx/stderr"; code=$?; set -e; }
 # Progress lines may precede it, but an error is exactly one JSON line and the last one.
 expect_error() { [ "$code" = 1 ] && [ "$(tail -n 1 "$fx/stderr")" = "{\"error_code\":\"$1\"}" ] && [ "$(grep -c error_code "$fx/stderr")" = 1 ] || { echo "expected $1, got $code: $(cat "$fx/stderr")" >&2; exit 1; }; }
-no_changes() { ! grep -Eq '^(apt-get|curl|firmware|systemctl enable)' "$fx/calls" || { echo "unexpected side effect: $(cat "$fx/calls")" >&2; exit 1; }; }
-no_secret() { ! grep -rqF "$secret" "$fx/calls" "$fx/stdout" "$fx/stderr" || { echo 'enrollment code leaked' >&2; exit 1; }; }
+no_changes() { ! grep -Eq '^(apt-get|curl|firmware|installed|systemctl enable)' "$fx/calls" || { echo "unexpected side effect: $(cat "$fx/calls")" >&2; exit 1; }; }
+no_secret() { ! grep -qF "$secret" "$fx/calls" "$fx/stdout" "$fx/stderr" "$fx/environments" || { echo 'enrollment code leaked' >&2; exit 1; }; }
 installed() { grep -Eq "^firmware install --release /usr/local/lib/agent-firmware-bootstrap\.[A-Za-z0-9]+/workload-release.json$" "$fx/calls"; }
 not_installed() { ! grep -q '^firmware install' "$fx/calls" || { echo 'installer ran' >&2; exit 1; }; }
+not_enrolled() { [ ! -e "$fx/enrolled-input" ] && ! grep -q '^installed ' "$fx/calls"; }
+enrollment_trial() { run_piped "$secret" "$fx/bootstrap.sh" --issuer https://auth.example.test --enrollment-code-stdin; }
+enrolled() {
+ [ "$code" = 0 ] && [ ! -s "$fx/seen-input" ] && [ "$(cat "$fx/stdout")" = '{"enrollment":"created"}' ] || return 1
+ printf '%s' "$secret" | cmp -s - "$fx/enrolled-input"
+ grep -Fx "installed $1 enroll --issuer https://auth.example.test --enrollment-code-stdin" "$fx/calls" >/dev/null
+ no_secret
+}
 
 # Help runs before stamp, root and host checks, even for unstamped scripts.
 run scripts/agent-firmware-install.sh --help
-[ "$code" = 0 ] && [ ! -s "$fx/stderr" ] && grep -qx 'agent-firmware-install.sh \[--decommission --confirm \[--delete-data\]\]' "$fx/stdout" || exit 1
+[ "$code" = 0 ] && [ ! -s "$fx/stderr" ] || exit 1
+grep -Fx '       sh agent-firmware-install.sh --decommission --confirm [--delete-data]' "$fx/stdout" >/dev/null
+grep -Fx '       sh agent-firmware-install.sh --issuer <url> --enrollment-code-stdin' "$fx/stdout" >/dev/null
 cp "$fx/stdout" "$fx/help"
 no_changes
 run scripts/agent-firmware-install.sh -h
@@ -116,11 +154,13 @@ stamp v0.1.0 short "$wsum"; run "$fx/bootstrap.sh"; expect_error unreleased_scri
 stamp v0.1.0 "$fsum" short; run "$fx/bootstrap.sh"; expect_error unreleased_script; no_changes
 stamp v0.1.0 "$fsum" "$wsum"
 
-# Usage: decommission is the only argument form.
+# Usage: each argument form is exclusive.
 run "$fx/bootstrap.sh" --issuer https://auth.example.test; expect_error invalid_usage; no_changes
+run "$fx/bootstrap.sh" --issuer '' --enrollment-code-stdin; expect_error invalid_usage; no_changes
 run "$fx/bootstrap.sh" --enrollment-code-stdin; expect_error invalid_usage; no_changes
 run "$fx/bootstrap.sh" --enrollment-code-file "$fx/calls"; expect_error invalid_usage; no_changes
 run "$fx/bootstrap.sh" --decommission; expect_error invalid_usage; no_changes
+run "$fx/bootstrap.sh" --decommission --confirm --issuer https://auth.example.test --enrollment-code-stdin; expect_error invalid_usage; no_changes
 grep -qx 'agent-firmware-install: run with --help for usage' "$fx/stderr"
 
 # Unsupported system refuses before any change.
@@ -168,7 +208,7 @@ agent-firmware-install: Installing Docker from the Ubuntu archive, this can take
 # Piped input is unread by the bootstrap and never forwarded to firmware.
 run_piped "$secret" "$fx/bootstrap.sh"
 [ "$code" = 0 ] && installed && [ ! -s "$fx/seen-input" ] || exit 1
-no_secret
+not_enrolled; no_secret
 
 # Existing Docker is never modified: running is reused, stopped is refused.
 run "$fx/bootstrap.sh"; [ "$code" = 0 ]
@@ -201,6 +241,67 @@ run "$fx/truncated.sh"; [ "$code" != 0 ]; no_changes
 sed "s/^firmware_arm64_sha256=.*/firmware_arm64_sha256='unavailable'/" "$fx/bootstrap.sh" > "$fx/missing-arm64.sh"
 run "$fx/missing-arm64.sh"; expect_error unreleased_script; no_changes
 
+# Root Linux hands the pipe to the installed enrollment command after install.
+enrollment_trial; installed; enrolled /usr/local/bin/agent-firmware
+touch "$fx/install-fails"
+enrollment_trial; expect_error configuration_rejected; not_enrolled; no_secret
+rm "$fx/install-fails"
+printf 'expired\n' > "$fx/enroll-fails"
+enrollment_trial; expect_error enrollment_failed; installed; no_secret
+grep -F 'get a fresh code from your device page.' "$fx/stderr" >/dev/null
+grep -F 'Retry only the enroll command on the installed firmware.' "$fx/stderr" >/dev/null
+printf 'already_enrolled\n' > "$fx/enroll-fails"
+enrollment_trial; expect_error already_enrolled; installed; no_secret
+grep -F 'The device is enrolled and working. The code was not used.' "$fx/stderr" >/dev/null
+[ "$(grep -Ec '^firmware install|^installed ' "$fx/calls")" = 2 ]
+[ ! -s "$fx/stdout" ]
+rm "$fx/enroll-fails"
+
+# Emulate Linux ID changes and the sudo command without granting privileges.
+stub id <<'SH'
+#!/bin/sh
+[ -z "$(cat)" ] || exit 2
+case "$1" in -u|-g) : ;; *) exit 2 ;; esac
+if [ "${AF_TEST_ELEVATED:-}" = yes ]; then echo 0; else echo 1000; fi
+SH
+rm -f /usr/bin/sudo
+enrollment_trial; expect_error root_required; no_changes; not_enrolled; no_secret
+stub sudo <<'SH'
+#!/bin/sh
+printf 'sudo %s\n' "$*" >> /run/af-bootstrap/calls
+env >> /run/af-bootstrap/environments
+[ "$1" = -- ] || exit 2
+shift
+case "$(cat /run/af-bootstrap/sudo-mode)" in
+ grant) AF_TEST_ELEVATED=yes exec "$@" ;;
+ noop) exec "$@" ;;
+ deny) exit 1 ;;
+ *) exit 2 ;;
+esac
+SH
+one_sudo() {
+ [ "$(grep -c '^sudo ' "$fx/calls")" = 1 ]
+ [ "$(grep -c 'asking sudo' "$fx/stderr")" = 1 ]
+}
+printf 'grant\n' > "$fx/sudo-mode"
+enrollment_trial; one_sudo; installed; enrolled /usr/local/bin/agent-firmware
+printf 'already_enrolled\n' > "$fx/enroll-fails"
+enrollment_trial; one_sudo; expect_error already_enrolled; installed; no_secret
+rm "$fx/enroll-fails"
+cp "$fx/bootstrap.sh" "$fx/bootstrap with spaces.sh"
+run_piped "$secret" "$fx/bootstrap with spaces.sh" --issuer https://auth.example.test --enrollment-code-stdin
+one_sudo; enrolled /usr/local/bin/agent-firmware
+run_piped "$secret" "$fx/bootstrap.sh" --decommission --confirm
+one_sudo; [ "$code" = 0 ]; not_installed; not_enrolled; no_secret
+touch "$fx/install-fails"
+enrollment_trial; one_sudo; expect_error configuration_rejected; not_enrolled; no_secret
+rm "$fx/install-fails"
+for mode in noop deny; do
+ printf '%s\n' "$mode" > "$fx/sudo-mode"
+ enrollment_trial; one_sudo; expect_error root_required; no_changes; not_enrolled; no_secret
+ grep -F 'Run from a terminal where sudo can prompt, or run the same command as root.' "$fx/stderr" >/dev/null
+done
+
 # Simulate the Darwin shell tools inside this disposable Linux container.
 stub uname <<'SH'
 #!/bin/sh
@@ -227,6 +328,7 @@ printf 'arm64\n' > "$fx/mac-arch"
 printf '0\n' > "$fx/mac-uid"
 printf '26.0\n' > "$fx/mac-version"
 run "$fx/bootstrap.sh"; expect_error root_forbidden; no_changes
+enrollment_trial; expect_error root_forbidden; no_changes; not_enrolled; no_secret
 printf '501\n' > "$fx/mac-uid"
 printf '14.9\n' > "$fx/mac-version"
 run "$fx/bootstrap.sh"; expect_error unsupported_macos_version; no_changes
@@ -239,6 +341,13 @@ run "$fx/bootstrap.sh"
 grep -Eq '^curl .*download/v0\.1\.0/agent-firmware-darwin-arm64$' "$fx/calls"
 grep -Eq '^firmware install --release .*/workload-release.json$' "$fx/calls"
 ! grep -Eq '^(apt-get|systemctl|firmware validate-release)' "$fx/calls"
+export HOME
+HOME=$(mktemp -d)
+mac_wrapper="$HOME/Library/Application Support/agent-firmware/agent-firmware"
+mkdir -p "$(dirname "$mac_wrapper")"
+cp -p /usr/local/bin/agent-firmware "$mac_wrapper"
+enrollment_trial; enrolled "$mac_wrapper"
+! grep -Eq '^(sudo|apt-get|systemctl|firmware validate-release)' "$fx/calls"
 printf '# changed\n' >> "$fx/assets/agent-firmware-darwin-arm64"
 run "$fx/bootstrap.sh"; expect_error artifact_digest_mismatch; not_installed
 echo 'bootstrap tests passed'

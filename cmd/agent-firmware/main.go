@@ -204,6 +204,9 @@ func report(stderr io.Writer, code string, exit int) int {
 		_, _ = io.WriteString(stderr, "agent-firmware: The device is enrolled and working. The code was not used.\n")
 	case string(errEnrollmentCodeRequired):
 		_, _ = io.WriteString(stderr, "agent-firmware: "+newEnrollmentCommand+"\n")
+	case string(errEnrollmentFailed), string(errEnrollmentTimeout):
+		_, _ = io.WriteString(stderr, "agent-firmware: If the enrollment code expired, get a fresh code from your device page.\n"+
+			"agent-firmware: Retry only the enroll command on the installed firmware.\n")
 	case string(errWorkloadUnavailable):
 		_, _ = io.WriteString(stderr, "agent-firmware: "+operatorText(checkService)+"\n")
 	case string(configuration.ErrLegacy):

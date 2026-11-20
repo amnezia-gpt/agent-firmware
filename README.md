@@ -108,12 +108,13 @@ exits. This process can run in the foreground or under the installed unit.
 Installation has three responsibilities with one owner each:
 
 - **The script** `scripts/agent-firmware-install.sh` brings the firmware to the
-  host: it checks for Ubuntu 24.04 with systemd and root access on amd64 or arm64,
-  downloads the matching firmware binary and the workload release manifest, and
+  host. It supports Ubuntu 24.04 with systemd on amd64 or arm64 and macOS 15 or
+  later on Apple Silicon. On Linux, it asks `sudo` for root access when needed.
+  It downloads the matching firmware binary and the workload release manifest and
   verifies their SHA-256 digests. It checks the manifest before installing
-  `docker.io` from the Ubuntu archive when no engine exists. It does
-  not read the enrollment code, parse a profile, write a unit or manage the
-  service.
+  `docker.io` from the Ubuntu archive when no engine exists. In the enrollment
+  form it passes standard input to the installed `enroll` command after a
+  successful install, without reading it.
 - **The firmware** verifies the workload release and that Docker runs Linux on the
   host's architecture, prepares the native variants of the digest-pinned images, places
   itself, writes the systemd unit and rolls back a failed installation. The service
@@ -122,18 +123,32 @@ Installation has three responsibilities with one owner each:
 - **The workload** owns OAuth registration, code redemption, tokens and backend
   connections. It runs inside the container safety envelope.
 
-After downloading and verifying `agent-firmware-install.sh`, manufacture the device with:
+Install and enroll with the same command on Ubuntu and macOS. When an installer
+digest is pinned, use the exact versioned asset URL under `releases/download/`.
+The `releases/latest/` URL is for commands that omit the digest check.
 
 ```sh
-sudo sh agent-firmware-install.sh
+curl -fsSLo agent-firmware-install.sh '<versioned installer URL>' &&
+echo '<SHA-256>  agent-firmware-install.sh' | sha256sum -c - &&
+printf '%s' '<one-time code>' |
+  sh agent-firmware-install.sh --issuer 'https://auth.example' --enrollment-code-stdin
 ```
 
-On Apple Silicon, use macOS 15 or later and run Docker Desktop in your GUI login
-session. Select its Docker context before installing. Use the same verified
-bootstrap without `sudo`:
+To manufacture or update the device without enrolling, run the verified
+bootstrap without arguments.
 
 ```sh
 sh agent-firmware-install.sh
+```
+
+If Linux returns `root_required` in a non-interactive session, run the command
+from a terminal where `sudo` can prompt, or run the same command as root.
+
+On Apple Silicon, use macOS 15 or later and run Docker Desktop in your GUI login
+session. Select its Docker context before installing. The installed firmware
+command lives directly under its Application Support directory.
+
+```sh
 firmware="$HOME/Library/Application Support/agent-firmware/agent-firmware"
 "$firmware" status
 ```
@@ -148,21 +163,35 @@ update or removal.
 
 On macOS, use the installed command path in place of `sudo agent-firmware` for
 enrollment, update, status and removal. For example, run `"$firmware" update`.
-The data volumes live in Docker Desktop's VM. Resetting Docker Desktop or
-removing its data can erase the volumes. Switching engines makes them unavailable
-to the new engine. Decommission keeps those volumes by default.
+The root secret is private to the firmware's user account. The workload
+containers and other users cannot read it, while processes running as that
+user can. User-data volumes live in Docker Desktop's VM. The firmware leaves
+them untouched by default. Resetting Docker Desktop, clearing its data, or
+uninstalling it can delete the volumes. Switching engines makes them unavailable.
+Use a cloud Linux machine for data that must persist. Its container volumes
+live on the host disk.
 
-For installation, `agent-firmware-install.sh` takes no arguments and closes standard input when invoking
-`agent-firmware install --release workload-release.json`. It verifies the assets
-and checks release compatibility before it prepares Docker. The firmware creates
-the root secret during manufacture. It remains byte-identical across enrollment
-and repeated installs.
+The bootstrap gives the installation steps empty standard input. A failed
+installation leaves the one-time code unspent. The firmware creates the root
+secret during manufacture. It remains byte-identical across enrollment and
+repeated installs.
 
-To enroll with a code issued by the authorization server:
+The domain sets the lifetime of the one-time code. A first installation can take
+long enough for the code to expire. Get a fresh code from the device page and
+retry only enrollment on the installed firmware. Use the same issuer.
+
+On Ubuntu:
 
 ```sh
 printf '%s' '<one-time code>' | sudo agent-firmware enroll --issuer https://auth.example --enrollment-code-stdin
 sudo agent-firmware status
+```
+
+On macOS, use the installed command shown above:
+
+```sh
+printf '%s' '<one-time code>' | "$firmware" enroll --issuer https://auth.example --enrollment-code-stdin
+"$firmware" status
 ```
 
 `enroll` also accepts `--enrollment-code-file <file>`. The code stays in a private
@@ -174,9 +203,11 @@ refuses a different issuer.
 If `status` reports `identity_lost`, run the new installation command from the
 device's page in your account. Enrollment for the same domain uses the fresh
 code with the existing binding, keys, containers and volumes. The result
-includes `enrollment: "renewed"`, or `"created"` for a new binding. A working
-device returns `already_enrolled`. When the workload's state is unavailable,
-the command returns `workload_unavailable`. The code stays unused in both cases.
+includes `enrollment: "renewed"`, or `"created"` for a new binding. On a working
+device, the combined command completes the install or update before enrollment
+returns `already_enrolled` with exit status 1. When the workload's state is
+unavailable, the command returns `workload_unavailable`. The code stays unused
+in both cases.
 Recovery requires a workload release that reports `unenrolled`.
 
 `sudo agent-firmware update` downloads and runs the latest `agent-firmware-install.sh` without
@@ -185,11 +216,9 @@ installer locks the lifecycle under `/run/agent-firmware-install` and journals
 the previous binary pointer, unit, device record and enrollment record. An installation failure
 or interrupted install restores these from the journal.
 
-To leave a domain and delete the enrollment's local data, run:
-
-```sh
-sudo agent-firmware unenroll --confirm
-```
+To leave a domain and delete the enrollment's local data, run
+`sudo agent-firmware unenroll --confirm` on Ubuntu or
+`"$firmware" unenroll --confirm` on macOS.
 
 The firmware attempts deregistration, then removes containers, the network,
 enrollment volumes and operational keys. The device keeps its IDevID.
@@ -198,16 +227,16 @@ same domain attaches them and reports `user_data: "attached"`. Other domains
 use their own volumes. To erase the current domain's user data, add
 `--delete-data` to the confirmed command.
 
-To remove the firmware and its device identity while keeping user data:
-
-```sh
-sudo agent-firmware decommission --confirm
-```
+To remove the firmware and its device identity and leave user-data volumes untouched, run
+`sudo agent-firmware decommission --confirm` on Ubuntu or
+`"$firmware" decommission --confirm` on macOS.
 
 Add `--delete-data` to erase firmware volumes of every domain on the host. A
 subsequent install creates a new IDevID. Both removal commands report domain
 deregistration separately from local completion. Repeat an interrupted command
-with the same flags. Unclassified firmware volumes also stay by default.
+with the same flags. If the installed binary is gone, resume with the verified
+`sh agent-firmware-install.sh --decommission --confirm` command and the original
+data deletion flag. Unclassified firmware volumes also stay by default.
 
 If installation reports `legacy_state_layout` or `retained_firmware_volumes`,
 the following commands erase the firmware and its local data on this host.
@@ -215,7 +244,7 @@ This cannot be undone. Download the script first if it is missing:
 
 ```sh
 curl -fsSLo agent-firmware-install.sh https://github.com/amnezia-gpt/agent-firmware/releases/latest/download/agent-firmware-install.sh
-sudo sh agent-firmware-install.sh --decommission --confirm --delete-data
+sh agent-firmware-install.sh --decommission --confirm --delete-data
 ```
 
 Then run your original installation command again, unchanged. Cleanup of an
