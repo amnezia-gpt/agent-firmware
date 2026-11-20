@@ -2,7 +2,7 @@
 
 The release job requires a published schema 4 workload release manifest and
 a firmware binary that serves the Device API the manifest declares. The current
-pin is the published workload v0.8.0 manifest.
+pin is the published workload v0.9.1 manifest.
 
 Store the published file verbatim in `release/workload-release.json`. Preserve
 its whitespace and final newline. The release job cannot download the published
