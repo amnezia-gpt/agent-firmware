@@ -15,6 +15,9 @@ import (
 	"github.com/amnezia-gpt/agent-firmware/internal/deviceapi"
 	"github.com/amnezia-gpt/agent-firmware/internal/discovery"
 	"github.com/amnezia-gpt/agent-firmware/internal/dockerengine"
+	"github.com/amnezia-gpt/agent-firmware/internal/host"
+	"github.com/amnezia-gpt/agent-firmware/internal/installer"
+	"github.com/amnezia-gpt/agent-firmware/internal/privatefile"
 	"github.com/amnezia-gpt/agent-firmware/internal/service"
 	"github.com/amnezia-gpt/agent-firmware/internal/supervisor"
 	"github.com/amnezia-gpt/agent-firmware/internal/workload"
@@ -53,8 +56,8 @@ func runStateCommand(args []string, stdout, stderr io.Writer) int {
 			return report(stderr, "invalid_usage", 2)
 		}
 	}
-	if os.Geteuid() != 0 {
-		return report(stderr, "root_required", 1)
+	if reason := host.AccessCheck(); reason != "" {
+		return report(stderr, reason, 1)
 	}
 	store := configuration.Store{Path: path}
 	if args[0] == "status" {
@@ -82,7 +85,21 @@ func runStateCommand(args []string, stdout, stderr io.Writer) int {
 }
 
 func serve(parent context.Context, store configuration.Store, stdout io.Writer) error {
-	notifier := (service.Systemd{Layout: hostLayout}).Notifier()
+	userService := hostLayout.UserService && store.Path == defaultStateDir
+	if userService {
+		if err := installer.CheckParents(hostLayout, false); err != nil {
+			return err
+		}
+		if err := os.Mkdir(hostLayout.Runtime, 0700); err != nil && !errors.Is(err, os.ErrExist) {
+			return configuration.ErrWrite
+		}
+		root, err := privatefile.OpenDirectory(hostLayout.Runtime, privatefile.EffectiveOwner(), 0700)
+		if err != nil {
+			return configuration.ErrUnsafe
+		}
+		root.Close()
+	}
+	notifier := localService(hostLayout).Notifier()
 	manager := &apiManager{}
 	publishRuntime := func(status *runtimeStatus) {
 		if store.Path == defaultStateDir {
@@ -105,6 +122,7 @@ func serve(parent context.Context, store configuration.Store, stdout io.Writer) 
 		return nil
 	}
 	var previousIdentity configuration.IdentityCondition
+	readiness := service.Readiness{PID: os.Getpid()}
 	if initial, err := localState(store); err == nil && initial.Enrollment != nil {
 		previousIdentity = initial.Enrollment.Identity
 	}
@@ -120,6 +138,9 @@ func serve(parent context.Context, store configuration.Store, stdout io.Writer) 
 	}
 	return supervisor.Run(parent, func(ctx context.Context) (bool, error) {
 		result, err := executeManaged(ctx, store, manager)
+		if errors.Is(err, workload.ErrEngineUnavailable) {
+			manager.stop(deviceapi.LinkTargetChanged)
+		}
 		manager.drain(stdout)
 		if snapshot, currentErr := localState(store); currentErr == nil {
 			now := time.Now().UTC().Truncate(time.Second)
@@ -135,18 +156,29 @@ func serve(parent context.Context, store configuration.Store, stdout io.Writer) 
 					publishLinkStatus(manager.currentLink())
 				}
 			}
+			var observed *runtimeStatus
 			if e := snapshot.Enrollment; e != nil {
 				if err := manager.observeIdentity(e.Identity); err != nil {
 					return false, err
 				}
-				if snapshot.Removal != nil {
-					publishRuntime(nil)
-				} else if !errors.Is(err, configuration.ErrBusy) {
-					publishRuntime(observedRuntime(snapshot, manager.currentLink(), err, now))
+				if snapshot.Removal == nil {
+					observed = observedRuntime(snapshot, manager.currentLink(), err, now)
 				}
 			} else {
 				previousIdentity = configuration.IdentityCondition{}
-				publishRuntime(nil)
+			}
+			if userService && snapshot.Device != nil && snapshot.Removal == nil {
+				if observed == nil {
+					observed = &runtimeStatus{Generation: snapshot.Device.Generation()}
+				}
+				observed.Engine = observeEngine(err, now)
+				if err == nil && readiness.ReadyAt.IsZero() {
+					readiness.ReadyAt = time.Now().UTC()
+				}
+				observed.Readiness = readiness
+			}
+			if !errors.Is(err, configuration.ErrBusy) || observed == nil {
+				publishRuntime(observed)
 			}
 		}
 		return result.Changed, err
@@ -280,6 +312,15 @@ func executeManaged(parent context.Context, store configuration.Store, manager *
 		}
 		if snapshot.Enrollment == nil {
 			manager.stop(deviceapi.LinkTargetChanged)
+			if hostLayout.UserService && manager != nil && store.Path == defaultStateDir {
+				address, err := session.EngineAddress()
+				if err != nil {
+					return err
+				}
+				if err := checkEngine(ctx, address); err != nil {
+					return err
+				}
+			}
 			result.Applied = true
 			return nil
 		}
@@ -291,10 +332,6 @@ func executeManaged(parent context.Context, store configuration.Store, manager *
 				return err
 			}
 		}
-		stack, refreshed, err := manager.stack(ctx, snapshot)
-		if err != nil {
-			return err
-		}
 		address, err := session.EngineAddress()
 		if err != nil {
 			return err
@@ -305,6 +342,13 @@ func executeManaged(parent context.Context, store configuration.Store, manager *
 		}
 		defer engine.Close()
 		if err := engine.Prerequisites(ctx); err != nil {
+			if !hostLayout.UserService && errors.Is(err, workload.ErrEngineUnavailable) {
+				return workload.ErrEngine
+			}
+			return err
+		}
+		stack, refreshed, err := manager.stack(ctx, snapshot)
+		if err != nil {
 			return err
 		}
 		result, err = workload.Apply(ctx, engine, session, stack)

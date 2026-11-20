@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/amnezia-gpt/agent-firmware/internal/discovery"
+	"github.com/amnezia-gpt/agent-firmware/internal/host"
 )
 
 func TestValidateProfileCommand(t *testing.T) {
@@ -115,18 +116,19 @@ func TestInputFileFailureDoesNotLeakPath(t *testing.T) {
 	}
 }
 
-func TestStateCommandsRequireRootBeforeReadingOrWriting(t *testing.T) {
+func TestStateCommandsRespectHostPrivilegesBeforeReadingOrWriting(t *testing.T) {
 	stubStatusData(t)
 	for _, command := range []string{"status", "apply", "serve"} {
 		var stdout, stderr bytes.Buffer
 		state := filepath.Join(t.TempDir(), "private-state")
 		args := []string{command, "--state-dir", state}
-		if command == "serve" && os.Geteuid() == 0 {
+		reason := host.AccessCheck()
+		if command == "serve" && reason == "" {
 			continue // The foreground service owns its signal context.
 		}
 		code := run(args, strings.NewReader(""), &stdout, &stderr)
-		if os.Geteuid() != 0 {
-			if code != 1 || stderr.String() != "{\"error_code\":\"root_required\"}\n" {
+		if reason != "" {
+			if code != 1 || stderr.String() != "{\"error_code\":\""+reason+"\"}\n" {
 				t.Fatalf("exit=%d stderr=%q", code, stderr.String())
 			}
 		} else if command == "status" {
@@ -158,9 +160,9 @@ func TestRejectsAmbiguousCommandFlags(t *testing.T) {
 func TestApplyRequiresConfiguredRootStateBeforeEngineAccess(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"apply", "--state-dir", filepath.Join(t.TempDir(), "absent")}, strings.NewReader(""), &stdout, &stderr)
-	want := "{\"error_code\":\"root_required\"}\n"
-	if os.Geteuid() == 0 {
-		want = "{\"error_code\":\"not_configured\"}\n"
+	want := "{\"error_code\":\"not_configured\"}\n"
+	if reason := host.AccessCheck(); reason != "" {
+		want = "{\"error_code\":\"" + reason + "\"}\n"
 	}
 	if code != 1 || stdout.Len() != 0 || stderr.String() != want {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())

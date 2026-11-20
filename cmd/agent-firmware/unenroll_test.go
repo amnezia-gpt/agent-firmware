@@ -47,7 +47,7 @@ func (f *fakeRemoval) RetainedData(_ context.Context, id string) ([]dockerengine
 
 func TestUnenrollResumesLocalRemovalWithoutDomain(t *testing.T) {
 	temp := t.TempDir()
-	store := configuration.Store{Path: filepath.Join(temp, "state")}
+	store := configuration.Store{Path: filepath.Join(temp, "state"), EngineSocket: filepath.Join(temp, "engine.sock")}
 	layout := host.Layout{Lock: filepath.Join(temp, "lock"), UID: uint32(os.Geteuid()), GID: uint32(os.Getegid())}
 	device, err := configuration.ParseDevice(bytes.NewReader(fixture(t, manifestFixture)))
 	if err != nil {

@@ -75,8 +75,8 @@ func runEnroll(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if issuer == "" {
 		return report(stderr, "invalid_usage", 2)
 	}
-	if os.Geteuid() != 0 {
-		return report(stderr, "root_required", 1)
+	if reason := host.AccessCheck(); reason != "" {
+		return report(stderr, reason, 1)
 	}
 	var code []byte
 	if source != "" {

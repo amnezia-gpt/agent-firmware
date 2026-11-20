@@ -38,6 +38,7 @@ const (
 )
 
 const ErrEnginePrerequisites Error = "unsupported_docker_prerequisites"
+const ErrEngineUnavailable Error = "engine_unavailable"
 
 type Mount struct {
 	Name, Target string

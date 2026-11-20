@@ -128,6 +128,30 @@ After downloading and verifying `agent-firmware-install.sh`, manufacture the dev
 sudo sh agent-firmware-install.sh
 ```
 
+On Apple Silicon, use macOS 15 or later and run Docker Desktop in your GUI login
+session. Select its Docker context before installing. Use the same verified
+bootstrap without `sudo`:
+
+```sh
+sh agent-firmware-install.sh
+firmware="$HOME/Library/Application Support/agent-firmware/agent-firmware"
+"$firmware" status
+```
+
+The bootstrap downloads the native `darwin-arm64` firmware. Docker Desktop runs
+the ARM64 Linux workloads in its VM. The installed service is the user
+LaunchAgent `org.amnezia.agent-firmware`. It starts at login and waits for Docker
+Desktop to return after a shutdown or sleep. Status reports this as
+`waiting_for_engine`. The firmware records the context's Unix socket at install
+and uses it from the LaunchAgent. Start the originally selected engine before an
+update or removal.
+
+On macOS, use the installed command path in place of `sudo agent-firmware` for
+enrollment, update, status and removal. For example, run `"$firmware" update`.
+The data volumes live in Docker Desktop's VM. Resetting Docker Desktop or
+removing its data can erase the volumes. Switching engines makes them unavailable
+to the new engine. Decommission keeps those volumes by default.
+
 For installation, `agent-firmware-install.sh` takes no arguments and closes standard input when invoking
 `agent-firmware install --release workload-release.json`. It verifies the assets
 and checks release compatibility before it prepares Docker. The firmware creates

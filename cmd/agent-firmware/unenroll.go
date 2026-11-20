@@ -51,8 +51,8 @@ func runUnenroll(args []string, stdout, stderr io.Writer) int {
 		_, _ = io.WriteString(stderr, description+"Run agent-firmware unenroll --confirm to proceed.\n")
 		return report(stderr, "confirmation_required", 2)
 	}
-	if os.Geteuid() != 0 {
-		return report(stderr, "root_required", 1)
+	if reason := host.AccessCheck(); reason != "" {
+		return report(stderr, reason, 1)
 	}
 	_, _ = io.WriteString(stderr, description)
 	parent, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)

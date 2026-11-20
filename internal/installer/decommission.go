@@ -23,10 +23,8 @@ type RemovalHost struct {
 
 func InspectRemovalHost(ctx context.Context, layout hostplatform.Layout, services ServiceManager, resuming bool) (*RemovalHost, error) {
 	r := &RemovalHost{run: run{Request: Request{Layout: layout, Services: services}}}
-	for _, parent := range layout.Parents {
-		if !r.safeDir(parent, 0755) {
-			return nil, ErrConflict
-		}
+	if err := CheckParents(layout, false); err != nil {
+		return nil, err
 	}
 	for _, path := range layout.DropIns {
 		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
@@ -38,7 +36,7 @@ func InspectRemovalHost(ctx context.Context, layout hostplatform.Layout, service
 	}
 	fragment, err := services.Fragment(ctx)
 	if err != nil {
-		return nil, ErrSystemd
+		return nil, r.serviceError()
 	}
 	if fragment != "" && fragment != layout.Unit {
 		return nil, ErrConflict

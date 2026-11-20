@@ -2,6 +2,8 @@ package dockerengine
 
 import (
 	"context"
+	"errors"
+	"os"
 	"strings"
 
 	"github.com/amnezia-gpt/agent-firmware/internal/workload"
@@ -16,6 +18,9 @@ func (e *Engine) Prerequisites(parent context.Context) error {
 	defer cancel()
 	info, err := e.api.Info(ctx, client.InfoOptions{})
 	if err != nil {
+		if client.IsErrConnectionFailed(err) && !errors.Is(err, os.ErrPermission) && ctx.Err() != context.Canceled {
+			return workload.ErrEngineUnavailable
+		}
 		return classify(err)
 	}
 	architecture := info.Info.Architecture

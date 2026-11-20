@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"github.com/amnezia-gpt/agent-firmware/internal/dockerengine"
 	"github.com/amnezia-gpt/agent-firmware/internal/host"
 	"github.com/amnezia-gpt/agent-firmware/internal/privatefile"
+	"github.com/amnezia-gpt/agent-firmware/internal/service"
 	"github.com/amnezia-gpt/agent-firmware/internal/workload"
 )
 
@@ -83,6 +85,11 @@ func (d deviceStatus) text() string {
 	if d.Issuer != "" {
 		fmt.Fprintln(&out, "Issuer", d.Issuer)
 	}
+	for _, condition := range d.Conditions {
+		if condition.Type == "engine_ready" && condition.Reason == "waiting_for_engine" {
+			fmt.Fprintln(&out, "Docker engine: waiting for Docker Desktop")
+		}
+	}
 	switch {
 	case d.UserData == nil:
 		fmt.Fprintln(&out, "User data: unknown (local engine unavailable)")
@@ -107,6 +114,9 @@ func (d deviceStatus) text() string {
 		"check_service":          "Check the firmware service with 'systemctl status agent-firmware'.",
 		"repeat_removal_command": "Repeat the removal command to finish removing the device.",
 	}
+	if hostLayout.UserService {
+		hint["check_service"] = "Check the firmware LaunchAgent in your login session and make sure Docker Desktop is running."
+	}
 	if line := hint[d.NextStep]; line != "" {
 		fmt.Fprintln(&out, line)
 	}
@@ -129,6 +139,10 @@ func describeStatus(snapshot configuration.Snapshot, observed runtimeStatus, vol
 		doc.Conditions = append(doc.Conditions, statusCondition{Type: "identity_valid", Status: identity.Status, Reason: string(identity.Reason),
 			LastTransitionTime: identity.LastTransitionTime, LastProbeTime: identity.LastProbeTime})
 		doc.Conditions = append(doc.Conditions, observed.conditions(snapshot, now)...)
+	}
+	if snapshot.Device != nil && snapshot.Removal == nil && observed.Generation == snapshot.Device.Generation() &&
+		observed.Engine != nil && !now.Before(observed.Engine.LastProbeTime) && now.Sub(observed.Engine.LastProbeTime) <= 2*time.Minute {
+		doc.Conditions = append(doc.Conditions, *observed.Engine)
 	}
 	return doc
 }
@@ -180,11 +194,26 @@ func renderStatus(store configuration.Store, asJSON bool, stdout, stderr io.Writ
 }
 
 type runtimeStatus struct {
-	Generation string          `json:"generation"`
-	Binding    string          `json:"binding"`
-	BoundAt    time.Time       `json:"bound_at"`
-	Workloads  statusCondition `json:"workloads"`
-	Link       statusCondition `json:"link"`
+	service.Readiness
+	Generation string           `json:"generation"`
+	Binding    string           `json:"binding"`
+	BoundAt    time.Time        `json:"bound_at"`
+	Workloads  statusCondition  `json:"workloads"`
+	Link       statusCondition  `json:"link"`
+	Engine     *statusCondition `json:"engine,omitempty"`
+}
+
+func observeEngine(err error, now time.Time) *statusCondition {
+	condition := &statusCondition{Type: "engine_ready", Status: "unknown", Reason: "not_observed", LastProbeTime: now}
+	switch {
+	case err == nil:
+		condition.Status, condition.Reason = "true", "reachable"
+	case errors.Is(err, workload.ErrEngineUnavailable):
+		condition.Status, condition.Reason = "false", "waiting_for_engine"
+	case errors.Is(err, workload.ErrEnginePrerequisites):
+		condition.Status, condition.Reason = "false", workload.ErrEnginePrerequisites.Error()
+	}
+	return condition
 }
 
 func (r runtimeStatus) conditions(snapshot configuration.Snapshot, now time.Time) []statusCondition {

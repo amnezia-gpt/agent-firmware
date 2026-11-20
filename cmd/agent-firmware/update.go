@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/amnezia-gpt/agent-firmware/internal/configuration"
+	"github.com/amnezia-gpt/agent-firmware/internal/host"
 )
 
 // The permanent address of the installation script of the latest release.
@@ -58,8 +59,8 @@ func runUpdate(args []string, stdout, stderr io.Writer) int {
 	if len(args) != 0 {
 		return report(stderr, "invalid_usage", 2)
 	}
-	if os.Geteuid() != 0 {
-		return report(stderr, "root_required", 1)
+	if reason := host.AccessCheck(); reason != "" {
+		return report(stderr, reason, 1)
 	}
 	_, err := (configuration.Store{Path: defaultStateDir}).LoadDevice()
 	if err != nil {

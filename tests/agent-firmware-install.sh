@@ -74,14 +74,18 @@ done
 printf '{"installed":true}\n'
 SH
 printf '%s\n' '#!/bin/sh' 'exit 2' > "$fx/assets/agent-firmware-linux-$other_arch"
+cp "$fx/assets/$asset" "$fx/assets/agent-firmware-darwin-arm64"
+printf '%s\n' '# darwin fixture' >> "$fx/assets/agent-firmware-darwin-arm64"
 printf '{"release":true}\n' > "$fx/assets/workload-release.json"
 fsum=$(sha256sum "$fx/assets/$asset" | cut -d ' ' -f 1)
 other_sum=$(sha256sum "$fx/assets/agent-firmware-linux-$other_arch" | cut -d ' ' -f 1)
+mac_sum=$(sha256sum "$fx/assets/agent-firmware-darwin-arm64" | cut -d ' ' -f 1)
 wsum=$(sha256sum "$fx/assets/workload-release.json" | cut -d ' ' -f 1)
 stamp() {
  if [ "$arch" = amd64 ]; then amd64_sum=$2 arm64_sum=$other_sum
  else amd64_sum=$other_sum arm64_sum=$2; fi
  sed -e "s/@@RELEASE_TAG@@/$1/" -e "s/@@FIRMWARE_AMD64_SHA256@@/$amd64_sum/" -e "s/@@FIRMWARE_ARM64_SHA256@@/$arm64_sum/" \
+  -e "s/@@FIRMWARE_DARWIN_ARM64_SHA256@@/$mac_sum/" \
   -e "s/@@WORKLOAD_RELEASE_SHA256@@/$3/" scripts/agent-firmware-install.sh > "$fx/bootstrap.sh"
 }
 
@@ -193,7 +197,48 @@ rm "$fx/install-fails"
 head -n 40 "$fx/bootstrap.sh" > "$fx/truncated.sh"
 run "$fx/truncated.sh"; [ "$code" != 0 ]; no_changes
 
-# The common script requires both firmware digests on either architecture.
+# The common script requires all firmware digests.
 sed "s/^firmware_arm64_sha256=.*/firmware_arm64_sha256='unavailable'/" "$fx/bootstrap.sh" > "$fx/missing-arm64.sh"
 run "$fx/missing-arm64.sh"; expect_error unreleased_script; no_changes
+
+# Simulate the Darwin shell tools inside this disposable Linux container.
+stub uname <<'SH'
+#!/bin/sh
+case "$1" in -s) echo Darwin ;; -m) cat /run/af-bootstrap/mac-arch ;; *) exit 1 ;; esac
+SH
+stub id <<'SH'
+#!/bin/sh
+[ "$1" = -u ] && cat /run/af-bootstrap/mac-uid
+SH
+stub sw_vers <<'SH'
+#!/bin/sh
+[ "$1" = -productVersion ] && cat /run/af-bootstrap/mac-version
+SH
+mv /usr/bin/stat /usr/bin/af-stat
+stub stat <<'SH'
+#!/bin/sh
+[ "$1" = -f ] && [ "$2" = '%z' ] && exec /usr/bin/af-stat -c '%s' -- "$3"
+SH
+stub shasum <<'SH'
+#!/bin/sh
+[ "$1" = -a ] && [ "$2" = 256 ] && exec sha256sum "$3"
+SH
+printf 'arm64\n' > "$fx/mac-arch"
+printf '0\n' > "$fx/mac-uid"
+printf '26.0\n' > "$fx/mac-version"
+run "$fx/bootstrap.sh"; expect_error root_forbidden; no_changes
+printf '501\n' > "$fx/mac-uid"
+printf '14.9\n' > "$fx/mac-version"
+run "$fx/bootstrap.sh"; expect_error unsupported_macos_version; no_changes
+printf '15.0\n' > "$fx/mac-version"
+printf 'x86_64\n' > "$fx/mac-arch"
+run "$fx/bootstrap.sh"; expect_error unsupported_system; no_changes
+printf 'arm64\n' > "$fx/mac-arch"
+run "$fx/bootstrap.sh"
+[ "$code" = 0 ] && [ "$(cat "$fx/stdout")" = '{"installed":true}' ]
+grep -Eq '^curl .*download/v0\.1\.0/agent-firmware-darwin-arm64$' "$fx/calls"
+grep -Eq '^firmware install --release .*/workload-release.json$' "$fx/calls"
+! grep -Eq '^(apt-get|systemctl|firmware validate-release)' "$fx/calls"
+printf '# changed\n' >> "$fx/assets/agent-firmware-darwin-arm64"
+run "$fx/bootstrap.sh"; expect_error artifact_digest_mismatch; not_installed
 echo 'bootstrap tests passed'

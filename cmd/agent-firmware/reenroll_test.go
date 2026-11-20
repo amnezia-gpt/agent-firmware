@@ -312,7 +312,7 @@ func TestEnrollmentRefusalHintsPrecedeJSON(t *testing.T) {
 		errWorkloadUnavailable:    checkService,
 	} {
 		var stderr bytes.Buffer
-		want := "agent-firmware: " + hint + "\n" + `{"error_code":"` + failure.Error() + `"}` + "\n"
+		want := "agent-firmware: " + operatorText(hint) + "\n" + `{"error_code":"` + failure.Error() + `"}` + "\n"
 		if report(&stderr, failure.Error(), 1) != 1 || strings.TrimSpace(stderr.String()) != strings.TrimSpace(want) {
 			t.Fatalf("invalid hint for %v: %q", failure, &stderr)
 		}

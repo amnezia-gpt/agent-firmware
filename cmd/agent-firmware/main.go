@@ -12,7 +12,6 @@ import (
 	"github.com/amnezia-gpt/agent-firmware/internal/configuration"
 	"github.com/amnezia-gpt/agent-firmware/internal/deviceapi"
 	"github.com/amnezia-gpt/agent-firmware/internal/discovery"
-	"github.com/amnezia-gpt/agent-firmware/internal/dockerengine"
 	"github.com/amnezia-gpt/agent-firmware/internal/host"
 	"github.com/amnezia-gpt/agent-firmware/internal/workload"
 	"github.com/amnezia-gpt/agent-firmware/internal/workloadrelease"
@@ -26,19 +25,15 @@ func runPreflight(args []string, stdout, stderr io.Writer) int {
 	if len(args) != 0 {
 		return report(stderr, "invalid_usage", 2)
 	}
-	if os.Geteuid() != 0 {
-		return report(stderr, "root_required", 1)
+	if reason := host.AccessCheck(); reason != "" {
+		return report(stderr, reason, 1)
 	}
-	address, err := (configuration.Store{Path: defaultStateDir}).EngineAddress()
+	ctx := context.Background()
+	address, err := localEngineAddress(ctx, configuration.Store{Path: defaultStateDir})
 	if err != nil {
 		return report(stderr, err.Error(), 1)
 	}
-	engine, err := dockerengine.New(address)
-	if err != nil {
-		return report(stderr, err.Error(), 1)
-	}
-	defer engine.Close()
-	if err := engine.Prerequisites(context.Background()); err != nil {
+	if err := checkEngine(ctx, address); err != nil {
 		return report(stderr, err.Error(), 1)
 	}
 	return respond(stdout, stderr, struct {
@@ -210,17 +205,17 @@ func report(stderr io.Writer, code string, exit int) int {
 	case string(errEnrollmentCodeRequired):
 		_, _ = io.WriteString(stderr, "agent-firmware: "+newEnrollmentCommand+"\n")
 	case string(errWorkloadUnavailable):
-		_, _ = io.WriteString(stderr, "agent-firmware: "+checkService+"\n")
+		_, _ = io.WriteString(stderr, "agent-firmware: "+operatorText(checkService)+"\n")
 	case string(configuration.ErrLegacy):
 		_, _ = io.WriteString(stderr, `agent-firmware: An earlier firmware installation is on this host. It cannot be updated in place.
 agent-firmware: Run this command. It deletes the earlier installation and its data on this
 agent-firmware: host; this cannot be undone:
-`+reinstallInstructions)
+`+operatorText(reinstallInstructions))
 	case string(configuration.ErrRetainedVolumes):
 		_, _ = io.WriteString(stderr, `agent-firmware: Enrollment or unclassified firmware volumes are still on this host.
 agent-firmware: Run this command. It deletes the firmware volumes on this host;
 agent-firmware: this cannot be undone:
-`+reinstallInstructions)
+`+operatorText(reinstallInstructions))
 	}
 	message := "{\"error_code\":\"" + code + "\"}\n"
 	if n, err := io.WriteString(stderr, message); err != nil || n != len(message) {

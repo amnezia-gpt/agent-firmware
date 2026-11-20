@@ -1,6 +1,6 @@
 name: release
 
-# A pushed tag v* publishes both Linux binaries, the common installer and the
+# A pushed tag v* publishes the host binaries, the common installer and the
 # pinned workload manifest.
 on:
   pull_request:
@@ -14,7 +14,7 @@ jobs:
   test:
     strategy:
       matrix:
-        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-15]
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -27,10 +27,18 @@ jobs:
           go vet ./...
           CGO_ENABLED=0 go test ./...
       - name: Check bootstrap
+        if: runner.os == 'Linux'
         run: >-
           docker run --rm --network none --tmpfs /run:rw,noexec,nosuid
           --mount "type=bind,src=$PWD,dst=/work,readonly" ubuntu:24.04
           sh -ec 'touch /run/agent-firmware-installer-test && sh /work/tests/agent-firmware-install.sh'
+      - name: Verify native macOS executable
+        if: runner.os == 'macOS'
+        run: |
+          test "$(uname -m)" = arm64
+          CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/agent-firmware" ./cmd/agent-firmware
+          codesign --verify "$RUNNER_TEMP/agent-firmware"
+          "$RUNNER_TEMP/agent-firmware" --help >/dev/null
   release:
     if: github.ref_type == 'tag'
     needs: test
@@ -54,4 +62,5 @@ jobs:
         run: >-
           gh release create "$GITHUB_REF_NAME" dist/agent-firmware-install.sh
           dist/agent-firmware-linux-amd64 dist/agent-firmware-linux-arm64 dist/workload-release.json
+          dist/agent-firmware-darwin-arm64
           --verify-tag --generate-notes

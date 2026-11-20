@@ -5,11 +5,41 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/amnezia-gpt/agent-firmware/internal/configuration"
 	"github.com/amnezia-gpt/agent-firmware/internal/workload"
 )
+
+func TestEngineOfflineBackoffIsBoundedAndResetsAfterRecovery(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		start := time.Now()
+		var probes []int
+		var states []string
+		cycle := func(context.Context) (bool, error) {
+			probes = append(probes, int(time.Since(start)/time.Second))
+			switch len(probes) {
+			case 8:
+				return false, nil
+			case 10:
+				cancel()
+				return false, context.Canceled
+			default:
+				return false, workload.ErrEngineUnavailable
+			}
+		}
+		if err := Run(ctx, cycle, func(event Event) error { states = append(states, event.State); return nil }, Interval); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(probes, []int{0, 2, 6, 14, 30, 62, 122, 182, 212, 214}) ||
+			!reflect.DeepEqual(states, []string{"waiting_for_engine", "converged", "waiting_for_engine", "stopped"}) {
+			t.Fatalf("probe times %v, states %v", probes, states)
+		}
+	})
+}
 
 func TestTransitionsAreBoundedAndDuplicateSuccessIsSilent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

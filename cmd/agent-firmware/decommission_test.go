@@ -96,7 +96,8 @@ func decommissionTestHost(t *testing.T) (host.Layout, configuration.Store) {
 	layout := host.Layout{
 		Base: filepath.Join(dir, "bin"), Wrapper: filepath.Join(dir, "wrapper"), Unit: filepath.Join(dir, "unit"),
 		State: filepath.Join(dir, "state"), Runtime: filepath.Join(dir, "runtime"), Lock: filepath.Join(dir, "lock"),
-		UID: uint32(os.Geteuid()), GID: uint32(os.Getegid()),
+		EngineSocket: filepath.Join(dir, "engine.sock"),
+		UID:          uint32(os.Geteuid()), GID: uint32(os.Getegid()),
 	}
 	return layout, configuration.Store{Path: layout.State}
 }
@@ -260,10 +261,13 @@ func TestDecommissionLegacyOnlyRemovesLocally(t *testing.T) {
 }
 
 func TestDecommissionUnsafeStorageHint(t *testing.T) {
-	const want = `agent-firmware: The state directory has an unexpected entry, owner or mode. Inspect its metadata:
+	want := `agent-firmware: The state directory has an unexpected entry, owner or mode. Inspect its metadata:
 agent-firmware:   sudo find -P /var/lib/agent-firmware -xdev -maxdepth 2 -printf '%y %m %U:%G links=%n %p\n'
 {"error_code":"unsafe_state_storage"}
 `
+	if hostLayout.UserService {
+		want = "{\"error_code\":\"unsafe_state_storage\"}\n"
+	}
 	var stderr bytes.Buffer
 	if code := reportDecommissionError(&stderr, configuration.ErrUnsafe); code != 1 || stderr.String() != want {
 		t.Fatalf("unexpected diagnostic: %d %q", code, stderr.String())

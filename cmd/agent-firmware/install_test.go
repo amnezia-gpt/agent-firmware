@@ -221,7 +221,7 @@ agent-firmware:   curl -fsSLo agent-firmware-install.sh https://github.com/amnez
 			}
 			var out, stderr bytes.Buffer
 			if code := run([]string{"install", "--release", manifestFixture}, unreadableStdin{t}, &out, &stderr); code != 1 ||
-				out.Len() != 0 || stderr.String() != want {
+				out.Len() != 0 || stderr.String() != operatorText(want) {
 				t.Fatalf("legacy install: %d %q %q", code, &out, &stderr)
 			}
 		})
@@ -248,7 +248,7 @@ agent-firmware:   curl -fsSLo agent-firmware-install.sh https://github.com/amnez
 `
 	var out, stderr bytes.Buffer
 	if code := run([]string{"install", "--release", manifestFixture}, unreadableStdin{t}, &out, &stderr); code != 1 ||
-		out.Len() != 0 || stderr.String() != want {
+		out.Len() != 0 || stderr.String() != operatorText(want) {
 		t.Fatalf("retained volumes: %d %q %q", code, &out, &stderr)
 	}
 }
