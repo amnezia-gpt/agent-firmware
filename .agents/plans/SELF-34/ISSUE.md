@@ -3,7 +3,7 @@
 ## Metadata
 
 - Type: Feature / installer
-- Status: Validating (local checks passed, published release and live enrollment pending)
+- Status: Validating (v0.7.0 published and checked, live enrollment pending)
 - Size / risk: Small / medium (the bootstrap gains elevation and passes the enrollment code through)
 - Parent: [SELF-14](../SELF-14/ISSUE.md)
 - Dependencies: [SELF-22](../SELF-22/ISSUE.md) and [SELF-33](../SELF-33/ISSUE.md) (the Linux arm64 and macOS
@@ -153,7 +153,8 @@ installation leaves the code unspent. The points below are added to the scope.
 - [x] The bootstrap's tests cover every case listed under Scope.
 - [x] `--help` and README describe the one command. The no-argument form and `--decommission` behave as before.
 - [ ] Repeated on a working device, the command updates the firmware and ends with `already_enrolled`.
-- [ ] A release publishes the bootstrap with this form.
+- [x] v0.7.0 publishes the bootstrap with this form.
+- [x] Registration times out after five minutes and returns a confirmed Docker resource conflict before the deadline.
 
 ## Evidence
 
@@ -161,6 +162,18 @@ The shell harness passed in disposable Ubuntu 24.04 containers using native arm6
 macOS, sudo prompts and privilege refusal, and enrollment refusal. Go tests cover the actual enrollment diagnostic.
 The release build with the pinned workload manifest produced one stamped bootstrap with matching digests for all
 four assets. See [PLAN.md](PLAN.md#validation) for exact checks and limits.
+
+The [v0.7.0 release](https://github.com/amnezia-gpt/agent-firmware/releases/tag/v0.7.0) passed CI on Ubuntu amd64,
+Ubuntu arm64 and macOS arm64. The public bootstrap's four stamped digests matched the downloaded binaries and
+manifest. The published binaries accepted the manifest via `validate-release` in Ubuntu containers (emulated amd64
+and native arm64) and on macOS arm64. `codesign --verify` passed on the published macOS binary.
+
+The live macOS trial reached enrollment with a running LaunchAgent. Docker Engine 29.2.1 returned its IPv4 and IPv6
+flags both as network fields and as driver options. The firmware treated the options on its own bridge as a
+resource conflict and the enrollment command waited for confirmation. The fix accepts the two matching flags,
+reports a current resource conflict from the daemon before the wait expires, and bounds enrollment to five minutes
+(accepted by the owner on 2026-11-21). The regression test checks the conflict and deadline with a simulated clock.
+Read-only workload and removal preflights passed against the existing bridge in Docker Desktop with the fix.
 
 ## Compatibility
 

@@ -195,10 +195,10 @@ printf '%s' '<one-time code>' | "$firmware" enroll --issuer https://auth.example
 ```
 
 `enroll` also accepts `--enrollment-code-file <file>`. The code stays in a private
-runtime file until the workload finishes or the attempt fails. The firmware waits
-a bounded time for the workload's outcome. A failed enrollment preserves the
-prepared resources for retry with the same issuer. An existing enrollment
-refuses a different issuer.
+runtime file until the workload finishes or the attempt fails. Enrollment has a
+five-minute deadline and reports a detected Docker resource conflict immediately.
+A failed enrollment preserves the prepared resources for retry with the same
+issuer. An existing enrollment refuses a different issuer.
 
 If `status` reports `identity_lost`, run the new installation command from the
 device's page in your account. Enrollment for the same domain uses the fresh

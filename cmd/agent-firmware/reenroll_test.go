@@ -12,8 +12,10 @@ import (
 	"time"
 
 	"github.com/amnezia-gpt/agent-firmware/internal/configuration"
+	"github.com/amnezia-gpt/agent-firmware/internal/deviceapi"
 	"github.com/amnezia-gpt/agent-firmware/internal/dockerengine"
 	"github.com/amnezia-gpt/agent-firmware/internal/host"
+	"github.com/amnezia-gpt/agent-firmware/internal/workload"
 )
 
 func TestFirstEnrollmentReportsCreated(t *testing.T) {
@@ -60,6 +62,62 @@ func TestFirstEnrollmentReportsCreated(t *testing.T) {
 	result, err := enrollDevice(ctx, store, layout, issuer, []byte("sample_enrollment_code"), time.Millisecond, progress)
 	if err != nil || result != (enrollmentResult{"enrolled", "created", "created"}) || codes.Held() {
 		t.Fatalf("first enrollment result %+v, error %v", result, err)
+	}
+}
+
+func TestEnrollmentStopsOnCurrentResourceConflict(t *testing.T) {
+	enableTestRelease(t)
+	oldDiscover, oldCheck, oldCodes := discover, checkWorkloadVolumes, openCodes
+	t.Cleanup(func() { discover, checkWorkloadVolumes, openCodes = oldDiscover, oldCheck, oldCodes })
+	checkWorkloadVolumes = func(context.Context, *configuration.Session, *configuration.Input, bool) (bool, error) {
+		return false, nil
+	}
+	for _, test := range []struct {
+		name        string
+		otherDevice bool
+		want        error
+	}{
+		{"current workload conflict", false, workload.ErrConflict},
+		{"unrelated status waits for the deadline", true, errEnrollmentTimeout},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				store, _ := manufacturedStore(t)
+				base := t.TempDir()
+				layout := host.Layout{Lock: filepath.Join(base, "install.lock"), Runtime: filepath.Join(base, "run"),
+					UID: uint32(os.Geteuid()), GID: uint32(os.Getegid())}
+				if err := os.Mkdir(layout.Runtime, 0700); err != nil {
+					t.Fatal(err)
+				}
+				discover = func(context.Context, string) ([]byte, error) { return fixture(t, profileFixture), nil }
+				codes := &testCodes{staged: make(chan string, 1)}
+				openCodes = func(host.Layout, string, bool) (codeStore, error) { return codes, nil }
+				ctx, cancel := context.WithTimeout(t.Context(), enrollmentTimeout)
+				defer cancel()
+				started := time.Now()
+				progress := func(line string) {
+					if !strings.HasPrefix(line, "Starting the workloads") {
+						return
+					}
+					snapshot, err := store.Snapshot()
+					if err != nil {
+						t.Fatal(err)
+					}
+					status := observedRuntime(snapshot, deviceapi.LinkEvent{}, workload.ErrConflict, time.Now().Truncate(time.Second))
+					if test.otherDevice {
+						status.Generation = "other-generation"
+					}
+					writeRuntimeStatus(layout, status)
+				}
+				_, err := enrollDevice(ctx, store, layout, "https://auth.example", []byte("sample_enrollment_code"), time.Second, progress)
+				if err != test.want || codes.Held() {
+					t.Fatalf("enrollment error %v, want %v; code held %v", err, test.want, codes.Held())
+				}
+				if test.want == errEnrollmentTimeout && time.Since(started) != 5*time.Minute {
+					t.Fatalf("enrollment took %v, want five minutes", time.Since(started))
+				}
+			})
+		})
 	}
 }
 
