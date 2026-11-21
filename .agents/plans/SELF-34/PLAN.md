@@ -33,9 +33,10 @@ and installed command path.
 - [x] `sh scripts/build-release.sh v0.0.0 /tmp/agent-firmware-release` with `WORKLOAD_PUBLISHED_MANIFEST` set to
   the downloaded manifest. All four stamped SHA-256 values matched. Both `sh -n` and `fish -n` accepted the
   documented command, and the macOS system `sha256sum` accepted the checksum from stdin.
-- [ ] Published bootstrap, then full enrollment on supported Ubuntu and macOS hosts.
+- [x] v0.7.0 published the bootstrap; the downloaded assets matched its SHA-256 stamps.
+- [ ] Full enrollment on supported Ubuntu and macOS hosts.
 
 ## Status
 
-- Local implementation and verification complete. Publication and live enrollment remain open.
+- v0.7.0 is published. Live enrollment remains open.
 - Plan route: `needs-review`

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/signal"
@@ -20,6 +21,7 @@ import (
 )
 
 const (
+	enrollmentTimeout                             = 5 * time.Minute
 	errEnrollmentFailed       configuration.Error = "enrollment_failed"
 	errEnrollmentTimeout      configuration.Error = "enrollment_timeout"
 	errEnrollmentInterrupted  configuration.Error = "enrollment_interrupted"
@@ -100,7 +102,7 @@ func runEnroll(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	parent, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
-	ctx, cancel := context.WithTimeout(parent, 20*time.Minute)
+	ctx, cancel := context.WithTimeout(parent, enrollmentTimeout)
 	defer cancel()
 	store := configuration.Store{Path: defaultStateDir}
 	// The wait can take minutes; without these lines the terminal looks hung.
@@ -258,8 +260,8 @@ func enrollDevice(ctx context.Context, store configuration.Store, layout host.La
 	} else {
 		progress("Waiting for the domain to confirm the renewed enrollment")
 	}
-	progress("This usually takes a few minutes. Do not interrupt")
 	started := time.Now()
+	progress(fmt.Sprintf("Enrollment can take up to %d minutes.", enrollmentTimeout/time.Minute))
 	reported := started
 	for {
 		observed, err := store.Snapshot()
@@ -276,7 +278,13 @@ func enrollDevice(ctx context.Context, store configuration.Store, layout host.La
 		case configuration.IdentityRefused:
 			return reply, errEnrollmentFailed
 		}
-		if now := time.Now(); now.Sub(reported) >= enrollmentHeartbeat {
+		now := time.Now()
+		status := readRuntimeStatus(layout)
+		if status.Workloads.Status == "false" && status.Workloads.Reason == workload.ErrConflict.Error() &&
+			!status.Workloads.LastProbeTime.Before(started.Truncate(time.Second)) && status.matchesEnrollment(observed, now) {
+			return reply, workload.ErrConflict
+		}
+		if now.Sub(reported) >= enrollmentHeartbeat {
 			reported = now
 			progress("Still waiting for the enrollment (" + now.Sub(started).Round(time.Second).String() + ")")
 		}

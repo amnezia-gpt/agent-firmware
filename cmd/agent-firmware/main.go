@@ -209,6 +209,9 @@ func report(stderr io.Writer, code string, exit int) int {
 			"agent-firmware: Retry only the enroll command on the installed firmware.\n")
 	case string(errWorkloadUnavailable):
 		_, _ = io.WriteString(stderr, "agent-firmware: "+operatorText(checkService)+"\n")
+	case string(workload.ErrConflict):
+		_, _ = io.WriteString(stderr, "agent-firmware: A local Docker resource conflicts with the firmware's configuration.\n"+
+			"agent-firmware: Check the firmware status for details.\n")
 	case string(configuration.ErrLegacy):
 		_, _ = io.WriteString(stderr, `agent-firmware: An earlier firmware installation is on this host. It cannot be updated in place.
 agent-firmware: Run this command. It deletes the earlier installation and its data on this

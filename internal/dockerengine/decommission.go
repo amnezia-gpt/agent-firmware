@@ -107,9 +107,7 @@ func (e *Engine) removalInventory(ctx context.Context, installation string, kept
 	}
 	for _, network := range networks.Items {
 		if strings.HasPrefix(network.Name, prefix) || network.Labels[workload.LabelPrefix+"installation"] == installation {
-			if !owned(network.Labels, installation, "network") || network.Name != prefix+"net" ||
-				!containerID.MatchString(network.ID) || network.Driver != "bridge" || network.Ingress ||
-				network.Internal || len(network.Options) != 0 {
+			if !ownedBridge(network.Network, installation, prefix+"net") || !containerID.MatchString(network.ID) {
 				return false, workload.ErrConflict
 			}
 			call, cancel = context.WithTimeout(ctx, e.callTimeout)

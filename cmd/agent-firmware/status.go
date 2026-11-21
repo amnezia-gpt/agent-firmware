@@ -216,10 +216,14 @@ func observeEngine(err error, now time.Time) *statusCondition {
 	return condition
 }
 
+func (r runtimeStatus) matchesEnrollment(snapshot configuration.Snapshot, now time.Time) bool {
+	return snapshot.Removal == nil && r.Generation == snapshot.Device.Generation() && r.Binding == workload.EnrollmentID(snapshot.Enrollment.Profile.AuthIssuer) &&
+		r.BoundAt.Equal(snapshot.Enrollment.BoundAt) && !r.Workloads.LastProbeTime.IsZero() && !now.Before(r.Workloads.LastProbeTime) &&
+		now.Sub(r.Workloads.LastProbeTime) <= configuration.IdentityObservationAge
+}
+
 func (r runtimeStatus) conditions(snapshot configuration.Snapshot, now time.Time) []statusCondition {
-	if snapshot.Removal != nil || r.Generation != snapshot.Device.Generation() || r.Binding != workload.EnrollmentID(snapshot.Enrollment.Profile.AuthIssuer) ||
-		!r.BoundAt.Equal(snapshot.Enrollment.BoundAt) || r.Workloads.LastProbeTime.IsZero() || now.Before(r.Workloads.LastProbeTime) ||
-		now.Sub(r.Workloads.LastProbeTime) > configuration.IdentityObservationAge {
+	if !r.matchesEnrollment(snapshot, now) {
 		return []statusCondition{{Type: "workloads_ready", Status: "unknown", Reason: "not_observed"},
 			{Type: "link_ready", Status: "unknown", Reason: "not_observed"}}
 	}

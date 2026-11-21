@@ -102,6 +102,28 @@ func owned(values map[string]string, id, role string) bool {
 	return values[workload.LabelPrefix+"managed-by"] == workload.Manager && values[workload.LabelPrefix+"installation"] == id && values[workload.LabelPrefix+"role"] == role
 }
 
+func ownedBridge(n network.Network, installation, name string) bool {
+	if n.Name != name || !owned(n.Labels, installation, "network") || n.Driver != "bridge" || n.Internal || n.Ingress {
+		return false
+	}
+	// Docker may repeat its address-family flags in the driver options.
+	for option, value := range n.Options {
+		switch option {
+		case "com.docker.network.enable_ipv4":
+			if value != strconv.FormatBool(n.EnableIPv4) {
+				return false
+			}
+		case "com.docker.network.enable_ipv6":
+			if value != strconv.FormatBool(n.EnableIPv6) {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func (e *Engine) network(ctx context.Context, s workload.Stack, create bool) error {
 	ctx, cancel := context.WithTimeout(ctx, e.callTimeout)
 	defer cancel()
@@ -120,7 +142,7 @@ func (e *Engine) network(ctx context.Context, s workload.Stack, create bool) err
 		return classify(err)
 	}
 	n := result.Network
-	if n.Name != s.Network || !owned(n.Labels, s.Installation, "network") || n.Driver != "bridge" || n.Internal || n.Ingress || len(n.Options) > 0 {
+	if !ownedBridge(n.Network, s.Installation, s.Network) {
 		return workload.ErrConflict
 	}
 	for id, endpoint := range n.Containers {
