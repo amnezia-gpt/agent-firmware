@@ -152,6 +152,11 @@ func (r *RemovalHost) Stop(ctx context.Context) error {
 }
 
 func (r *RemovalHost) Remove(ctx context.Context) error {
+	if r.Layout.UserService {
+		if err := r.removeUserCommand(ctx); err != nil {
+			return err
+		}
+	}
 	for _, path := range r.paths {
 		if err := removeDurably(ctx, path); err != nil {
 			return err

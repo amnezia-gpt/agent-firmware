@@ -145,8 +145,19 @@ If Linux returns `root_required` in a non-interactive session, run the command
 from a terminal where `sudo` can prompt, or run the same command as root.
 
 On Apple Silicon, use macOS 15 or later and run Docker Desktop in your GUI login
-session. Select its Docker context before installing. The installed firmware
-command lives directly under its Application Support directory.
+session. Select its Docker context before installing. The installer exposes
+`agent-firmware` at `~/.local/bin/agent-firmware`. If needed, it adds
+that directory to PATH for a zsh, Bash or fish login shell. Open a new
+terminal after PATH setup.
+
+```sh
+agent-firmware status
+agent-firmware update
+```
+
+Use `env AGENT_FIRMWARE_NO_MODIFY_PATH=1 sh agent-firmware-install.sh` to install
+without shell setup. The preference carries over to updates. If the shell
+cannot find the short command, use the Application Support path directly.
 
 ```sh
 firmware="$HOME/Library/Application Support/agent-firmware/agent-firmware"
@@ -161,8 +172,7 @@ Desktop to return after a shutdown or sleep. Status reports this as
 and uses it from the LaunchAgent. Start the originally selected engine before an
 update or removal.
 
-On macOS, use the installed command path in place of `sudo agent-firmware` for
-enrollment, update, status and removal. For example, run `"$firmware" update`.
+On macOS, run firmware commands from the user's session without `sudo`.
 The root secret is private to the firmware's user account. The workload
 containers and other users cannot read it, while processes running as that
 user can. User-data volumes live in Docker Desktop's VM. The firmware leaves
@@ -229,7 +239,8 @@ use their own volumes. To erase the current domain's user data, add
 
 To remove the firmware and its device identity and leave user-data volumes untouched, run
 `sudo agent-firmware decommission --confirm` on Ubuntu or
-`"$firmware" decommission --confirm` on macOS.
+`agent-firmware decommission --confirm` on macOS. On macOS, decommission
+removes the firmware's command link and makes its PATH setup inactive.
 
 Add `--delete-data` to erase firmware volumes of every domain on the host. A
 subsequent install creates a new IDevID. Both removal commands report domain

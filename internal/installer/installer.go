@@ -256,6 +256,9 @@ func Install(ctx context.Context, request Request) (err error) {
 		return ErrWrite
 	}
 	_ = os.RemoveAll(r.transaction)
+	if l.UserService {
+		r.installUserCommand()
+	}
 	return nil
 }
 
