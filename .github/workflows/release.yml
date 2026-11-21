@@ -1,9 +1,9 @@
 name: release
+run-name: ${{ github.ref_name }}
 
 # A pushed tag v* publishes the host binaries, the common installer and the
 # pinned workload manifest.
 on:
-  pull_request:
   push:
     tags: ['v*']
 
@@ -40,7 +40,6 @@ jobs:
           codesign --verify "$RUNNER_TEMP/agent-firmware"
           "$RUNNER_TEMP/agent-firmware" --help >/dev/null
   release:
-    if: github.ref_type == 'tag'
     needs: test
     permissions:
       contents: write

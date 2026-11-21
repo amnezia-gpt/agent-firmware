@@ -268,10 +268,11 @@ When building a stack, the firmware resolves each scope requested by the
 manifest to exactly one resource. An update may refresh the resource list once
 for a missing scope. The signing keys pinned at enrollment are retained.
 
-A pushed `v*` tag triggers release CI. CI builds the assets from
-[the repository pin](release/workload-release.json) and does not download the
-published workload manifest; the pin is compared with it by hand when it is
-replaced. Asset generation requires the firmware to serve the manifest's API
+Push the release commit to `main`, then push its `v*` tag. The tag starts one
+release run named after that version. It checks all three host platforms before
+building the assets from [the repository pin](release/workload-release.json).
+When replacing the pin, compare it with the published workload manifest.
+Asset generation requires the firmware to serve the manifest's API
 and the manifest to list both Linux architectures. One installer script checks
 the stamped digests of the selected binary and the same manifest.
 See [release preparation](release/README.md).
