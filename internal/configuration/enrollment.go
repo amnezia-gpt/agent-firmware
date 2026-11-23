@@ -277,5 +277,9 @@ func (s *Session) RefreshEnrollment(existing *Enrollment, raw []byte) error {
 	}
 	record := existing.record()
 	record.Profile = raw
-	return s.writeEnrollment(host.EnrollmentDir, record)
+	if err := s.writeEnrollment(host.EnrollmentDir, record); err != nil {
+		return err
+	}
+	existing.Profile, existing.raw = profile, raw
+	return nil
 }

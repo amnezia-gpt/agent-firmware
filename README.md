@@ -3,7 +3,7 @@
 Go host supervisor for Amnezia devices. The first feature is tracked in
 [SELF-1](.agents/plans/SELF-1/ISSUE.md).
 
-The firmware builds a stack from a schema 4 workload manifest. It serves Device
+The firmware builds a stack from a workload manifest using schema 4 or 5. It serves Device
 API v3 over an HTTP/2 stream opened into the manifest's device API client
 container. The release check compares the pinned manifest with the exact
 published bytes and verifies the API and host platform before installation.

@@ -1,0 +1,189 @@
+{
+ "description": "Test vectors for workload manifest schema 5. 'valid' is accepted. Each rejection applies a JSON Pointer change to 'valid'. The manifest includes both a required and an optional resource binding.",
+ "valid": {
+  "schema_version": 5,
+  "kind": "workload-release",
+  "release": "v1.2.3",
+  "source_revision": "0123456789abcdef0123456789abcdef01234567",
+  "device_api": "urn:agent-firmware:device-api:v3",
+  "platforms": [
+   "linux/amd64",
+   "linux/arm64"
+  ],
+  "volumes": {
+   "front-state": {
+    "retention": "enrollment"
+   },
+   "worker-home": {
+    "retention": "user-data"
+   },
+   "worker-auth": {
+    "retention": "enrollment"
+   }
+  },
+  "services": {
+   "front": {
+    "image": {
+     "repository": "registry.example/acme/front",
+     "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "user": "65532:65532",
+    "aliases": [
+     "front"
+    ],
+    "environment": {
+     "AUTH_ISSUER": {
+      "from": "issuer"
+     },
+     "TRUST_BUNDLE": {
+      "from": "trust_bundle"
+     },
+     "TRUST_SHA256": {
+      "from": "trust_bundle_sha256"
+     },
+     "API_BASE_URL": {
+      "from": "resource",
+      "scope": "example:use"
+     },
+     "STATE_DIR": {
+      "value": "/var/lib/front"
+     },
+     "EXTRA_URL": {
+      "from": "resource",
+      "scope": "example:extra",
+      "optional": true
+     }
+    },
+    "volumes": [
+     {
+      "source": "front-state",
+      "target": "/var/lib/front"
+     },
+     {
+      "source": "worker-auth",
+      "target": "/run/worker-auth"
+     }
+    ],
+    "health_start_seconds": 5,
+    "stop_grace_seconds": 15
+   },
+   "worker": {
+    "image": {
+     "repository": "registry.example/acme/worker",
+     "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "read_only": true,
+    "aliases": [
+     "worker"
+    ],
+    "depends_on": [
+     "front"
+    ],
+    "volumes": [
+     {
+      "source": "worker-home",
+      "target": "/home/worker"
+     },
+     {
+      "source": "worker-auth",
+      "target": "/run/worker-auth",
+      "read_only": true
+     }
+    ],
+    "health_start_seconds": 60,
+    "stop_grace_seconds": 20
+   }
+  },
+  "device_api_client": {
+   "service": "front",
+   "dial": [
+    "frontctl",
+    "dial-stdio"
+   ],
+   "enrollment_status": [
+    "frontctl",
+    "enrollment",
+    "status"
+   ],
+   "deregister": [
+    "frontctl",
+    "deregister"
+   ]
+  }
+ },
+ "reject": [
+  {
+   "reason": "optional binding in v4",
+   "layer": "schema",
+   "set": {
+    "/schema_version": 4
+   }
+  },
+  {
+   "reason": "unsupported schema version",
+   "layer": "schema",
+   "set": {
+    "/schema_version": 6
+   }
+  },
+  {
+   "reason": "optional is false",
+   "layer": "schema",
+   "set": {
+    "/services/front/environment/EXTRA_URL/optional": false
+   }
+  },
+  {
+   "reason": "optional is null",
+   "layer": "schema",
+   "set": {
+    "/services/front/environment/EXTRA_URL/optional": null
+   }
+  },
+  {
+   "reason": "optional is a string",
+   "layer": "schema",
+   "set": {
+    "/services/front/environment/EXTRA_URL/optional": "true"
+   }
+  },
+  {
+   "reason": "optional on issuer",
+   "layer": "schema",
+   "set": {
+    "/services/front/environment/AUTH_ISSUER/optional": true
+   }
+  },
+  {
+   "reason": "optional on trust bundle",
+   "layer": "schema",
+   "set": {
+    "/services/front/environment/TRUST_BUNDLE/optional": true
+   }
+  },
+  {
+   "reason": "optional on trust pin",
+   "layer": "schema",
+   "set": {
+    "/services/front/environment/TRUST_SHA256/optional": true
+   }
+  },
+  {
+   "reason": "optional on literal",
+   "layer": "schema",
+   "set": {
+    "/services/front/environment/STATE_DIR/optional": true
+   }
+  },
+  {
+   "reason": "optional resource without a scope",
+   "layer": "schema",
+   "set": {
+    "/services/front/environment/EXTRA_URL": {
+     "from": "resource",
+     "optional": true
+    }
+   }
+  }
+ ]
+}

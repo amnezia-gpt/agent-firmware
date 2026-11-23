@@ -48,6 +48,7 @@ type Spec struct {
 	Installation, Role, Name, Image, Network, User string
 	Aliases, DependsOn                             []string
 	Env                                            map[string]string
+	UnsetEnv                                       []string `json:",omitempty"`
 	Mounts                                         []Mount
 	ReadOnly                                       bool
 	HealthStart, StopSeconds                       int
@@ -126,11 +127,16 @@ func FromInput(input *configuration.Input) (Stack, error) {
 			case "trust_bundle_sha256":
 				spec.Env[key] = profile.IngressTrustSHA256
 			case "resource":
-				spec.Env[key] = resolved[value.Scope]
+				if url, ok := resolved[value.Scope]; ok {
+					spec.Env[key] = url
+				} else {
+					spec.UnsetEnv = append(spec.UnsetEnv, key)
+				}
 			default:
 				spec.Env[key] = value.Value
 			}
 		}
+		slices.Sort(spec.UnsetEnv)
 		for _, volume := range service.Volumes {
 			spec.Mounts = append(spec.Mounts, Mount{prefix + volume.Source, volume.Target, volume.ReadOnly})
 		}
@@ -142,19 +148,19 @@ func FromInput(input *configuration.Input) (Stack, error) {
 
 // A known ambiguity takes precedence over a missing scope. An update must
 // never use a resource refresh to choose between competing identifiers.
-func resolveScopes(profile backendprofile.Profile, scopes []string) (map[string]string, error) {
+func resolveScopes(profile backendprofile.Profile, scopes []workloadrelease.ResourceScope) (map[string]string, error) {
 	resolved := make(map[string]string, len(scopes))
 	missing := false
 	for _, scope := range scopes {
-		resource, err := profile.ResolveScope(scope)
+		resource, err := profile.ResolveScope(scope.Scope)
 		if errors.Is(err, backendprofile.ErrScopeMissing) {
-			missing = true
+			missing = missing || scope.Required
 			continue
 		}
 		if err != nil {
 			return nil, err
 		}
-		resolved[scope] = resource
+		resolved[scope.Scope] = resource
 	}
 	if missing {
 		return nil, backendprofile.ErrScopeMissing

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"slices"
 
 	"github.com/amnezia-gpt/agent-firmware/internal/deviceidentity"
 	"github.com/amnezia-gpt/agent-firmware/internal/host"
@@ -22,6 +23,7 @@ type Device struct {
 	rootFingerprint string
 	identity        *deviceidentity.Device
 	sealedIdentity  string
+	refreshPending  bool
 }
 
 type deviceRecord struct {
@@ -30,10 +32,14 @@ type deviceRecord struct {
 	Release         []byte `json:"workload_release"`
 	RootFingerprint string `json:"root_secret_sha256"`
 	Identity        string `json:"idevid_key"`
+	RefreshPending  bool   `json:"optional_resource_refresh_pending,omitempty"`
 }
 
 func (d *Device) Release() workloadrelease.Release { return d.release }
 func (d *Device) Generation() string               { return d.generation }
+func (d *Device) OptionalResourceRefreshPending() bool {
+	return d.refreshPending
+}
 func (d *Device) Thumbprint() string {
 	if d.identity == nil {
 		return ""
@@ -111,14 +117,21 @@ func loadDevice(root *os.Root) (*Device, error) {
 	if err != nil {
 		return nil, err
 	}
-	fields, ok := strictjson.Object(data, "schema_version", "generation", "workload_release", "root_secret_sha256", "idevid_key")
+	fields, ok := strictjson.Members(data)
 	if !ok {
-		if old, valid := strictjson.Members(data); valid && old["idevid_key"] == nil {
-			return nil, ErrRootSecret
-		}
 		return nil, ErrCorrupt
 	}
-	if string(bytes.TrimSpace(fields["schema_version"])) != "2" {
+	if fields["idevid_key"] == nil {
+		return nil, ErrRootSecret
+	}
+	if pending := fields["optional_resource_refresh_pending"]; pending != nil {
+		if string(bytes.TrimSpace(pending)) != "true" {
+			return nil, ErrCorrupt
+		}
+		delete(fields, "optional_resource_refresh_pending")
+	}
+	if len(fields) != 5 || string(bytes.TrimSpace(fields["schema_version"])) != "2" ||
+		fields["generation"] == nil || fields["workload_release"] == nil || fields["root_secret_sha256"] == nil {
 		return nil, ErrCorrupt
 	}
 	var r deviceRecord
@@ -143,7 +156,28 @@ func loadDevice(root *os.Root) (*Device, error) {
 	}
 	device.sealedIdentity = r.Identity
 	device.rootFingerprint = r.RootFingerprint
+	device.refreshPending = r.RefreshPending
 	return device, nil
+}
+
+func (s *Session) writeDevice(device *Device, refreshPending bool) error {
+	data, err := json.Marshal(deviceRecord{
+		Version: 2, Generation: device.generation, Release: device.raw,
+		RootFingerprint: device.rootFingerprint, Identity: device.sealedIdentity, RefreshPending: refreshPending,
+	})
+	if err != nil {
+		return ErrWrite
+	}
+	return s.store.atomic(s.root, host.DeviceState, data)
+}
+
+// CompleteOptionalResourceRefresh clears the candidate marker after workload
+// convergence and any enrollment profile write have succeeded.
+func (s *Session) CompleteOptionalResourceRefresh(device *Device) error {
+	if !device.refreshPending {
+		return nil
+	}
+	return s.writeDevice(device, false)
 }
 
 // Manufacture publishes only device state. The guard checks for retained
@@ -170,40 +204,41 @@ func (s Store) Manufacture(device *Device, guard func(*Session) error) (bool, er
 		if err != nil && !errors.Is(err, ErrMissing) {
 			return err
 		}
-		var fingerprint, identity string
+		next := *device
+		var refreshPending bool
 		if old != nil {
-			if _, err := loadEnrollment(session.root, old); err != nil && !errors.Is(err, ErrMissing) {
+			enrollment, err := loadEnrollment(session.root, old)
+			if err != nil && !errors.Is(err, ErrMissing) {
 				return err
 			}
 			if old.generation == device.generation {
 				return s.synchronize(session.root)
 			}
-			fingerprint, identity = old.rootFingerprint, old.sealedIdentity
+			next.rootFingerprint, next.sealedIdentity = old.rootFingerprint, old.sealedIdentity
+			refreshPending = enrollment != nil && slices.ContainsFunc(device.release.ResourceScopes(), func(scope workloadrelease.ResourceScope) bool {
+				return !scope.Required
+			})
 		} else {
 			if guard != nil {
 				if err := guard(session); err != nil {
 					return err
 				}
 			}
-			fingerprint, err = initializeRootSecret(session.root)
+			next.rootFingerprint, err = initializeRootSecret(session.root)
 			if err != nil {
 				return err
 			}
-			root, err := checkedRootSecret(session.root, fingerprint)
+			root, err := checkedRootSecret(session.root, next.rootFingerprint)
 			if err != nil {
 				return err
 			}
 			defer clear(root)
-			identity, err = deviceidentity.GenerateDevice(root)
+			next.sealedIdentity, err = deviceidentity.GenerateDevice(root)
 			if err != nil {
 				return ErrRootSecret
 			}
 		}
-		data, err := json.Marshal(deviceRecord{2, device.generation, device.raw, fingerprint, identity})
-		if err != nil {
-			return ErrWrite
-		}
-		if err := s.atomic(session.root, host.DeviceState, data); err != nil {
+		if err := session.writeDevice(&next, refreshPending); err != nil {
 			return err
 		}
 		changed = true

@@ -67,15 +67,24 @@ func (r Release) Order() []string {
 	return ordered
 }
 
-// ResourceScopes returns the distinct OAuth scopes requested by the manifest.
-func (r Release) ResourceScopes() []string {
+type ResourceScope struct {
+	Scope    string
+	Required bool
+}
+
+// ResourceScopes returns each scope once. Any required binding makes its scope required.
+func (r Release) ResourceScopes() []ResourceScope {
 	scopes := map[string]bool{}
 	for _, service := range r.Services {
 		for _, value := range service.Environment {
 			if value.From == "resource" {
-				scopes[value.Scope] = true
+				scopes[value.Scope] = scopes[value.Scope] || !value.Optional
 			}
 		}
 	}
-	return slices.Sorted(maps.Keys(scopes))
+	var result []ResourceScope
+	for _, scope := range slices.Sorted(maps.Keys(scopes)) {
+		result = append(result, ResourceScope{Scope: scope, Required: scopes[scope]})
+	}
+	return result
 }

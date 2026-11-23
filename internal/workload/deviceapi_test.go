@@ -79,3 +79,64 @@ func TestReleaseVectorsBuildAndApplyAnotherStack(t *testing.T) {
 		}
 	}
 }
+
+func TestOptionalResourceBindingResolution(t *testing.T) {
+	manifest, err := os.ReadFile("../workloadrelease/testdata/manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawProfile, err := os.ReadFile("../backendprofile/testdata/profile-v4.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest = bytes.Replace(manifest, []byte(`"schema_version": 4`), []byte(`"schema_version": 5`), 1)
+	required := []byte(`"scope": "example:use"`)
+	optional := bytes.Replace(manifest, required, []byte(`"scope": "example:use", "optional": true`), 1)
+	mixed := bytes.Replace(optional, []byte(`"AUTH_ISSUER": {`), []byte(`"REQUIRED_URL":{"from":"resource","scope":"example:use"},"AUTH_ISSUER": {`), 1)
+	for _, test := range []struct {
+		name     string
+		manifest []byte
+		urls     []string
+		wantErr  error
+	}{
+		{name: "available", manifest: optional, urls: []string{"https://resource.example/api"}},
+		{name: "absent", manifest: optional},
+		{name: "ambiguous", manifest: optional, urls: []string{"https://resource.example/api", "https://other.example/api"}, wantErr: backendprofile.ErrScopeAmbiguous},
+		{name: "required", manifest: manifest, wantErr: backendprofile.ErrScopeMissing},
+		{name: "mixed", manifest: mixed, wantErr: backendprofile.ErrScopeMissing},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			profile, err := backendprofile.Parse(bytes.NewReader(rawProfile))
+			if err != nil {
+				t.Fatal(err)
+			}
+			profile.Resources = []backendprofile.Resource{}
+			for _, url := range test.urls {
+				profile.Resources = append(profile.Resources, backendprofile.Resource{Identifier: url, Scopes: []string{"example:use"}})
+			}
+			raw, err := backendprofile.Encode(profile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stack, err := FromReaders(bytes.NewReader(raw), bytes.NewReader(test.manifest))
+			if !errors.Is(err, test.wantErr) {
+				t.Fatalf("stack: %v, want %v", err, test.wantErr)
+			}
+			if err != nil {
+				return
+			}
+			spec := stack.Specs[0]
+			value, found := spec.Env["API_BASE_URL"]
+			if len(test.urls) == 0 {
+				if found || !slices.Contains(spec.UnsetEnv, "API_BASE_URL") {
+					t.Fatalf("missing binding did not suppress the variable: set=%t, unset=%v", found, spec.UnsetEnv)
+				}
+			} else if !found || value != test.urls[0] || len(spec.UnsetEnv) != 0 {
+				t.Fatalf("unexpected resolved binding: %q, unset=%v", value, spec.UnsetEnv)
+			}
+			if result, err := Apply(t.Context(), fake(), &memoryJournal{}, stack); err != nil || !result.Applied {
+				t.Fatalf("stack apply: %+v, %v", result, err)
+			}
+		})
+	}
+}

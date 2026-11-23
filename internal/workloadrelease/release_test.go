@@ -11,7 +11,17 @@ import (
 )
 
 func TestAcceptedManifestVectors(t *testing.T) {
-	data, err := os.ReadFile("../../.agents/plans/SELF-24/workload-release-v4.vectors.json")
+	for _, set := range []struct{ name, path string }{
+		{"v4", "../../.agents/plans/SELF-24/workload-release-v4.vectors.json"},
+		{"v5", "../../.agents/plans/SELF-37/workload-release-v5.vectors.json"},
+	} {
+		t.Run(set.name, func(t *testing.T) { testManifestVectors(t, set.path) })
+	}
+}
+
+func testManifestVectors(t *testing.T, path string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}

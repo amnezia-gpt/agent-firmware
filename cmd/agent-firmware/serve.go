@@ -235,9 +235,11 @@ var refreshResources = func(ctx context.Context, profile backendprofile.Profile)
 }
 
 func (m *apiManager) stack(ctx context.Context, snapshot configuration.Snapshot) (workload.Stack, []byte, error) {
-	stack, err := workload.FromInput(snapshot.Enrollment.Input(snapshot.Device))
-	if !errors.Is(err, backendprofile.ErrScopeMissing) {
-		return stack, nil, err
+	stack, stackErr := workload.FromInput(snapshot.Enrollment.Input(snapshot.Device))
+	missingOptional := snapshot.Device.OptionalResourceRefreshPending() &&
+		slices.ContainsFunc(stack.Specs, func(spec workload.Spec) bool { return len(spec.UnsetEnv) > 0 })
+	if !errors.Is(stackErr, backendprofile.ErrScopeMissing) && !missingOptional {
+		return stack, nil, stackErr
 	}
 	// An installed candidate gets one resource refresh in this service run.
 	// Manufacture and update never look up the issuer themselves.
@@ -263,11 +265,15 @@ func (m *apiManager) stack(ctx context.Context, snapshot configuration.Snapshot)
 	// Retain the old scope bindings for a rollback to the preceding release.
 	// Discovery is authoritative only for the newly requested missing scopes.
 	before.Resources = slices.Clone(before.Resources)
+	added := false
 	for _, scope := range snapshot.Device.Release().ResourceScopes() {
-		if _, err := before.ResolveScope(scope); !errors.Is(err, backendprofile.ErrScopeMissing) {
+		if _, err := before.ResolveScope(scope.Scope); !errors.Is(err, backendprofile.ErrScopeMissing) {
 			continue
 		}
-		resource, err := after.ResolveScope(scope)
+		resource, err := after.ResolveScope(scope.Scope)
+		if errors.Is(err, backendprofile.ErrScopeMissing) {
+			continue
+		}
 		if err != nil {
 			return workload.Stack{}, nil, err
 		}
@@ -275,10 +281,14 @@ func (m *apiManager) stack(ctx context.Context, snapshot configuration.Snapshot)
 			return current.Identifier == resource
 		})
 		if index == -1 {
-			before.Resources = append(before.Resources, backendprofile.Resource{Identifier: resource, Scopes: []string{scope}})
+			before.Resources = append(before.Resources, backendprofile.Resource{Identifier: resource, Scopes: []string{scope.Scope}})
 		} else {
-			before.Resources[index].Scopes = append(slices.Clone(before.Resources[index].Scopes), scope)
+			before.Resources[index].Scopes = append(slices.Clone(before.Resources[index].Scopes), scope.Scope)
 		}
+		added = true
+	}
+	if !added {
+		return stack, nil, stackErr
 	}
 	raw, err := backendprofile.Encode(before)
 	if err != nil {
@@ -289,7 +299,10 @@ func (m *apiManager) stack(ctx context.Context, snapshot configuration.Snapshot)
 		return workload.Stack{}, nil, err
 	}
 	stack, err = workload.FromInput(input)
-	return stack, raw, err
+	if err != nil {
+		return workload.Stack{}, nil, err
+	}
+	return stack, raw, nil
 }
 
 func executeManaged(parent context.Context, store configuration.Store, manager *apiManager) (workload.Result, error) {
@@ -322,7 +335,7 @@ func executeManaged(parent context.Context, store configuration.Store, manager *
 				}
 			}
 			result.Applied = true
-			return nil
+			return session.CompleteOptionalResourceRefresh(snapshot.Device)
 		}
 		if manager == nil {
 			return errAPIServe
@@ -370,6 +383,9 @@ func executeManaged(parent context.Context, store configuration.Store, manager *
 			if err := session.RefreshEnrollment(snapshot.Enrollment, refreshed); err != nil {
 				return err
 			}
+		}
+		if err := session.CompleteOptionalResourceRefresh(snapshot.Device); err != nil {
+			return err
 		}
 		if target.ID != "" {
 			outcome, statusErr := manager.status.Run(ctx, engine, target, stack.Client.EnrollmentStatus)

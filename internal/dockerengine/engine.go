@@ -395,8 +395,9 @@ func (e *Engine) Inspect(ctx context.Context, name string, spec workload.Spec) (
 func env(values []string) map[string]string {
 	out := map[string]string{}
 	for _, v := range values {
-		k, value, _ := strings.Cut(v, "=")
-		out[k] = value
+		if k, value, set := strings.Cut(v, "="); set {
+			out[k] = value
+		}
 	}
 	return out
 }
@@ -420,6 +421,9 @@ func matches(s workload.Spec, c container.InspectResponse, image client.ImageIns
 	expected := env(image.Config.Env)
 	for k, v := range s.Env {
 		expected[k] = v
+	}
+	for _, key := range s.UnsetEnv {
+		delete(expected, key)
 	}
 	if !reflect.DeepEqual(env(config.Env), expected) {
 		return false
@@ -468,7 +472,8 @@ func (e *Engine) Create(ctx context.Context, s workload.Spec, op string) (worklo
 	for _, m := range s.Mounts {
 		mounts = append(mounts, mount.Mount{Type: mount.TypeVolume, Source: m.Name, Target: m.Target, ReadOnly: m.ReadOnly})
 	}
-	var environment []string
+	// A bare key masks an image default in the Docker container process.
+	environment := slices.Clone(s.UnsetEnv)
 	for k, v := range s.Env {
 		environment = append(environment, k+"="+v)
 	}

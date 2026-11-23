@@ -1,7 +1,7 @@
 # Local device services
 
 The accepted [Device API v3 contract and public vectors](../.agents/plans/SELF-14/DESIGN.md#device-api-v3)
-define the JSON fields, byte encodings and failures. A schema 4 manifest names
+define the JSON fields, byte encodings and failures. The workload manifest names
 the client service and its command to open the device link.
 
 ## Software root secret

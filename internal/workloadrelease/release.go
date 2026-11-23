@@ -33,6 +33,9 @@ const (
 )
 
 type Release struct {
+	// The v4 canonical encoding omitted the schema version. Keep that encoding
+	// for stored generations and include the version for newer manifests.
+	SchemaVersion  int                          `json:"schema_version,omitempty"`
 	Kind           string                       `json:"kind"`
 	Version        string                       `json:"release"`
 	SourceRevision string                       `json:"source_revision"`
@@ -85,9 +88,10 @@ type VolumeDeclaration struct {
 }
 
 type Value struct {
-	Value string `json:"value,omitempty"`
-	From  string `json:"from,omitempty"`
-	Scope string `json:"scope,omitempty"`
+	Value    string `json:"value,omitempty"`
+	From     string `json:"from,omitempty"`
+	Scope    string `json:"scope,omitempty"`
+	Optional bool   `json:"optional,omitempty"`
 }
 
 type APIClient struct {
@@ -122,14 +126,18 @@ func Parse(reader io.Reader) (Release, error) {
 		"schema_version", "kind", "release", "source_revision", "device_api", "platforms", "volumes", "services", "device_api_client",
 	})
 	var release Release
-	if !ok || string(bytes.TrimSpace(fields["schema_version"])) != "4" || json.Unmarshal(data, &release) != nil ||
+	version := string(bytes.TrimSpace(fields["schema_version"]))
+	if !ok || (version != "4" && version != "5") || json.Unmarshal(data, &release) != nil ||
 		release.Kind != "workload-release" || release.DeviceAPI != DeviceAPIV3 ||
 		!versionPattern.MatchString(release.Version) || !revisionPattern.MatchString(release.SourceRevision) ||
 		len(release.Platforms) < 1 || !unique(release.Platforms, 4, validPlatform) ||
 		!validVolumes(fields["volumes"], release.Volumes) ||
-		!validServices(fields["services"], release.Services) || !validClient(fields["device_api_client"], release.Client) ||
+		!validServices(fields["services"], release.Services, version == "5") || !validClient(fields["device_api_client"], release.Client) ||
 		!release.validReferences() {
 		return Release{}, ErrInvalid
+	}
+	if version == "4" {
+		release.SchemaVersion = 0
 	}
 	return release, nil
 }
@@ -170,20 +178,20 @@ func object(raw []byte, required []string, optional ...string) (map[string]json.
 	return fields, true
 }
 
-func validServices(data []byte, services map[string]Service) bool {
+func validServices(data []byte, services map[string]Service, supportsOptionalResources bool) bool {
 	fields, ok := strictjson.Members(data)
 	if !ok || len(fields) < 1 || len(fields) > MaxServices {
 		return false
 	}
 	for name, raw := range fields {
-		if !namePattern.MatchString(name) || !validService(raw, services[name]) {
+		if !namePattern.MatchString(name) || !validService(raw, services[name], supportsOptionalResources) {
 			return false
 		}
 	}
 	return true
 }
 
-func validService(raw []byte, service Service) bool {
+func validService(raw []byte, service Service, supportsOptionalResources bool) bool {
 	fields, ok := object(raw, []string{"image", "health_start_seconds", "stop_grace_seconds"},
 		"user", "read_only", "aliases", "depends_on", "environment", "volumes")
 	if !ok || service.HealthStart < 1 || service.HealthStart > 600 || service.StopGrace < 1 || service.StopGrace > 120 {
@@ -198,7 +206,7 @@ func validService(raw []byte, service Service) bool {
 		!unique(service.Aliases, 4, aliasPattern.MatchString) || !unique(service.DependsOn, 7, namePattern.MatchString) {
 		return false
 	}
-	if fields["environment"] != nil && !validEnvironment(fields["environment"], service.Environment) {
+	if fields["environment"] != nil && !validEnvironment(fields["environment"], service.Environment, supportsOptionalResources) {
 		return false
 	}
 	var volumes []json.RawMessage
@@ -215,7 +223,7 @@ func validService(raw []byte, service Service) bool {
 	return true
 }
 
-func validEnvironment(data []byte, values map[string]Value) bool {
+func validEnvironment(data []byte, values map[string]Value, supportsOptionalResources bool) bool {
 	fields, ok := strictjson.Members(data)
 	if !ok || len(fields) > 32 {
 		return false
@@ -235,7 +243,8 @@ func validEnvironment(data []byte, values map[string]Value) bool {
 				return false
 			}
 		case "resource":
-			if _, ok := object(raw, []string{"from", "scope"}); !ok || !ValidScope(v.Scope) {
+			binding, ok := object(raw, []string{"from", "scope"}, "optional")
+			if !ok || !ValidScope(v.Scope) || binding["optional"] != nil && (!supportsOptionalResources || !v.Optional) {
 				return false
 			}
 		default:
