@@ -105,13 +105,15 @@ func TestEveryHelpTopicAndFlagIsDispatched(t *testing.T) {
 				t.Error("help must use the installation script's file name")
 			}
 			if command.name == "decommission" &&
-				(!strings.Contains(want, operatorText("sudo sh agent-firmware-install.sh --decommission --confirm\n")) ||
+				(!strings.Contains(want, "    "+updateScriptURL+" \\\n    | sh -s -- --decommission --confirm\n") ||
+					strings.Contains(want, "sh agent-firmware-install.sh") ||
 					!strings.Contains(want, "Those volumes cannot be attached") ||
 					!strings.Contains(want, "block a later install")) {
 				t.Error("help must explain offline removal and its effect on reinstalling")
 			}
 			for _, line := range strings.Split(want, "\n") {
-				if len(line) > 80 {
+				// An address cannot be wrapped.
+				if len(line) > 80 && !strings.Contains(line, updateScriptURL) {
 					t.Errorf("help line exceeds 80 columns: %q", line)
 				}
 			}

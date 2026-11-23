@@ -225,10 +225,8 @@ func TestReleaseGateRejectsUnavailableTransportBeforeDiscovery(t *testing.T) {
 	const want = `agent-firmware: An earlier firmware installation is on this host. It cannot be updated in place.
 agent-firmware: Run this command. It deletes the earlier installation and its data on this
 agent-firmware: host; this cannot be undone:
-agent-firmware:   sudo sh agent-firmware-install.sh --decommission --confirm --delete-data
+agent-firmware:   curl -fsSL https://github.com/amnezia-gpt/agent-firmware/releases/latest/download/agent-firmware-install.sh | sh -s -- --decommission --confirm --delete-data
 agent-firmware: Then run your original installation command again, unchanged.
-agent-firmware: If agent-firmware-install.sh is not in this directory, download it first:
-agent-firmware:   curl -fsSLo agent-firmware-install.sh https://github.com/amnezia-gpt/agent-firmware/releases/latest/download/agent-firmware-install.sh
 {"error_code":"legacy_state_layout"}
 `
 	for _, layout := range []struct {
@@ -267,10 +265,8 @@ func TestInstallRetainedVolumeRecoveryHint(t *testing.T) {
 	const want = `agent-firmware: Enrollment or unclassified firmware volumes are still on this host.
 agent-firmware: Run this command. It deletes the firmware volumes on this host;
 agent-firmware: this cannot be undone:
-agent-firmware:   sudo sh agent-firmware-install.sh --decommission --confirm --delete-data
+agent-firmware:   curl -fsSL https://github.com/amnezia-gpt/agent-firmware/releases/latest/download/agent-firmware-install.sh | sh -s -- --decommission --confirm --delete-data
 agent-firmware: Then run your original installation command again, unchanged.
-agent-firmware: If agent-firmware-install.sh is not in this directory, download it first:
-agent-firmware:   curl -fsSLo agent-firmware-install.sh https://github.com/amnezia-gpt/agent-firmware/releases/latest/download/agent-firmware-install.sh
 {"error_code":"retained_firmware_volumes"}
 `
 	var out, stderr bytes.Buffer

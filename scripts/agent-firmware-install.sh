@@ -4,9 +4,12 @@
 # release assets and verifies their digests. Everything else on the host is
 # done by the verified firmware binary: device state, the service and rollback.
 #
-#   sh agent-firmware-install.sh
-#   sh agent-firmware-install.sh --issuer <url> --enrollment-code-stdin
-#   sh agent-firmware-install.sh --decommission --confirm [--delete-data]
+#   curl -fsSL <url> | sh
+#   curl -fsSL <url> | AGENT_FIRMWARE_ENROLLMENT_CODE=<code> sh -s -- --issuer <url>
+#   curl -fsSL <url> | sh -s -- --decommission --confirm [--delete-data]
+#
+# Saved as a file it accepts the same arguments, and the code on standard
+# input with --issuer <url> --enrollment-code-stdin.
 #
 # The release pipeline stamps the tag and digests below. An unstamped
 # copy refuses to run. The whole body is one function called on the last
@@ -20,14 +23,30 @@ firmware_darwin_arm64_sha256='@@FIRMWARE_DARWIN_ARM64_SHA256@@'
 workload_sha256='@@WORKLOAD_RELEASE_SHA256@@'
 
 main() {
+ # The code leaves the environment before anything else runs, so no child
+ # process inherits it. It stays in this shell variable only.
+ code=${AGENT_FIRMWARE_ENROLLMENT_CODE-}
+ code_given=${AGENT_FIRMWARE_ENROLLMENT_CODE+yes}
+ unset AGENT_FIRMWARE_ENROLLMENT_CODE
  if [ "$#" = 1 ] && { [ "$1" = --help ] || [ "$1" = -h ]; }; then
   /bin/cat <<'HELP'
-Usage: sh agent-firmware-install.sh
+Usage: curl -fsSL <installer-url> | sh
+       curl -fsSL <installer-url> | AGENT_FIRMWARE_ENROLLMENT_CODE=<code> sh -s -- --issuer <url>
+       curl -fsSL <installer-url> | sh -s -- --decommission --confirm [--delete-data]
+
+Saved as a file, the script takes the same arguments:
+       sh agent-firmware-install.sh
        sh agent-firmware-install.sh --issuer <url> --enrollment-code-stdin
        sh agent-firmware-install.sh --decommission --confirm [--delete-data]
 
 Without arguments: verify and install the current firmware release, or
 update an installed one. On Linux the script asks sudo for root access.
+
+--issuer <url>
+    Install or update, then enroll with the one-time code taken from the
+    AGENT_FIRMWARE_ENROLLMENT_CODE environment variable. The script keeps the
+    code in memory only and gives it to the installed firmware's enrollment
+    command on standard input.
 
 --issuer <url> --enrollment-code-stdin
     Install or update, then pass standard input to the installed firmware's
@@ -73,8 +92,12 @@ HELP
 
  decommission=false
  issuer=
+ code_from_environment=false
  case "$#/${1:-}" in
   0/) : ;;
+  2/--issuer) [ -n "$2" ] && [ -n "$code" ] || die invalid_usage
+              issuer=$2
+              code_from_environment=true ;;
   3/--issuer) [ -n "$2" ] && [ "$3" = --enrollment-code-stdin ] || die invalid_usage
               issuer=$2 ;;
   2/--decommission|3/--decommission) [ "$2" = --confirm ] || die invalid_usage
@@ -82,6 +105,13 @@ HELP
        decommission=true ;;
   *) die invalid_usage ;;
  esac
+ # The variable belongs to one form only.
+ [ "$code_from_environment" = true ] || [ -z "$code_given" ] || die invalid_usage
+ if [ "$code_from_environment" = true ]; then
+  # The code reaches the firmware through the shell's own printf, never
+  # through the arguments of a process.
+  [ "$(command -v printf)" = printf ] || die prerequisite_missing
+ fi
 
  is_digest() {
   [ "${#1}" = 64 ] || return 1
@@ -94,6 +124,14 @@ HELP
  case "$release_tag" in *[!0-9A-Za-z.+-]*) die unreleased_script ;; esac
  is_digest "$firmware_amd64_sha256" && is_digest "$firmware_arm64_sha256" \
   && is_digest "$firmware_darwin_arm64_sha256" && is_digest "$workload_sha256" || die unreleased_script
+ base_url=https://github.com/amnezia-gpt/agent-firmware/releases/download/$release_tag
+ # True for a readable copy of this script from this very release.
+ is_this_bootstrap() {
+  [ -f "$1" ] && [ -r "$1" ] || return 1
+  first=
+  IFS= read -r first < "$1" || :
+  [ "$first" = '#!/bin/sh' ] && grep -Fqx "release_tag='$release_tag'" "$1" </dev/null
+ }
 
  os=$(uname -s </dev/null)
  case "$os/$(uname -m </dev/null)" in
@@ -120,21 +158,45 @@ HELP
   if [ "$(id -u </dev/null)" != 0 ] || [ "$(id -g </dev/null)" != 0 ]; then
    command -v sudo >/dev/null 2>&1 || die root_required
    case "$0" in /*) script=$0 ;; *) script=$(pwd -P)/$0 ;; esac
-   [ -r "$script" ] && [ -f "$script" ] || die root_required
    say 'Linux setup requires root, asking sudo'
-   # The launcher checks privileges before re-entry. Exit 42 means that the
-   # child already reported its own error. Sudo keeps the pipe on stdin and
-   # uses the terminal for authentication.
-   if sudo -- /bin/sh -c '
-    [ "$(/usr/bin/id -u </dev/null)" = 0 ] && [ "$(/usr/bin/id -g </dev/null)" = 0 ] || exit 1
-    /bin/sh "$@" || exit 42
-   ' agent-firmware-sudo "$script" "$@"; then
-    return
-   else
-    [ "$?" = 42 ] || die root_required
-    reported=true
-    exit 1
+   from_file=true
+   if ! is_this_bootstrap "$script"; then
+    # Read from standard input (curl ... | sh): there is no file to run
+    # again, so fetch the script of this same release into a private
+    # directory that the exit trap removes.
+    from_file=false
+    for tool in curl mktemp stat; do
+     command -v "$tool" >/dev/null 2>&1 || die prerequisite_missing
+    done
+    workdir=$(mktemp -d "${TMPDIR:-/tmp}/agent-firmware-bootstrap.XXXXXXXX" </dev/null) || die bootstrap_write_failed
+    script=$workdir/agent-firmware-install.sh
+    curl --proto '=https' --proto-redir '=https' --tlsv1.2 --fail --silent --location \
+     --retry 3 --connect-timeout 20 --max-time 600 --max-filesize 65536 \
+     --output "$script" "$base_url/agent-firmware-install.sh" </dev/null 2>/dev/null || die download_failed
+    size=$(stat -c '%s' -- "$script" </dev/null) || die download_failed
+    [ "$size" -le 65536 ] && is_this_bootstrap "$script" || die download_failed
    fi
+   # The launcher checks privileges before re-entry. Exit 42 means that the
+   # child already reported its own error. Sudo uses the terminal for
+   # authentication, so standard input stays free for the code.
+   launch() {
+    sudo -- /bin/sh -c '
+     [ "$(/usr/bin/id -u </dev/null)" = 0 ] && [ "$(/usr/bin/id -g </dev/null)" = 0 ] || exit 1
+     /bin/sh "$@" || exit 42
+    ' agent-firmware-sudo "$script" "$@"
+   }
+   status=0
+   if [ "$code_from_environment" = true ]; then
+    printf '%s' "$code" | launch --issuer "$issuer" --enrollment-code-stdin || status=$?
+   elif [ "$from_file" = true ]; then
+    launch "$@" || status=$?
+   else
+    launch "$@" </dev/null || status=$?
+   fi
+   [ "$status" != 0 ] || return 0
+   [ "$status" = 42 ] || die root_required
+   reported=true
+   exit 1
   fi
   platform_tools='sha256sum timeout'
   work_parent=/usr/local/lib
@@ -147,7 +209,6 @@ HELP
  # so it lives beside the place the firmware is installed to. It is private
  # (umask 077), holds no secret and is removed on exit.
  workdir=$(mktemp -d "${work_parent%/}/agent-firmware-bootstrap.XXXXXXXX" </dev/null) || die bootstrap_write_failed
- base_url=https://github.com/amnezia-gpt/agent-firmware/releases/download/$release_tag
  fetch() {
   # $1 asset name, $2 expected sha256, $3 size cap in bytes
   curl --proto '=https' --proto-redir '=https' --tlsv1.2 --fail --silent --location \
@@ -220,6 +281,12 @@ HELP
  rm -rf -- "$workdir" </dev/null || die bootstrap_cleanup_failed
  workdir=
  reported=true
+ if [ "$code_from_environment" = true ]; then
+  # Standard input is the script text here, so the code is piped instead.
+  status=0
+  printf '%s' "$code" | PATH=$firmware_path "$installed" enroll --issuer "$issuer" --enrollment-code-stdin || status=$?
+  exit "$status"
+ fi
  PATH=$firmware_path exec "$installed" enroll --issuer "$issuer" --enrollment-code-stdin
 }
 

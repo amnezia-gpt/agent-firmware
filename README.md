@@ -113,8 +113,9 @@ Installation has three responsibilities with one owner each:
   It downloads the matching firmware binary and the workload release manifest and
   verifies their SHA-256 digests. It checks the manifest before installing
   `docker.io` from the Ubuntu archive when no engine exists. In the enrollment
-  form it passes standard input to the installed `enroll` command after a
-  successful install, without reading it.
+  form it gives the one-time code to the installed `enroll` command on standard
+  input after a successful install. It holds a code taken from the environment
+  only in memory, and does not store or print it.
 - **The firmware** verifies the workload release and that Docker runs Linux on the
   host's architecture, prepares the native variants of the digest-pinned images, places
   itself, writes the systemd unit and rolls back a failed installation. The service
@@ -123,22 +124,40 @@ Installation has three responsibilities with one owner each:
 - **The workload** owns OAuth registration, code redemption, tokens and backend
   connections. It runs inside the container safety envelope.
 
-Install and enroll with the same command on Ubuntu and macOS. When an installer
-digest is pinned, use the exact versioned asset URL under `releases/download/`.
-The `releases/latest/` URL is for commands that omit the digest check.
+Install and enroll with the same command on Ubuntu and macOS. It works in
+POSIX shells and in fish 3.1 or later, and leaves no file in the current
+directory.
+
+```sh
+curl -fsSL https://github.com/amnezia-gpt/agent-firmware/releases/latest/download/agent-firmware-install.sh |
+  AGENT_FIRMWARE_ENROLLMENT_CODE='<one-time code>' sh -s -- --issuer 'https://auth.example'
+```
+
+The script takes the code out of its environment before it starts any other
+program, keeps it in memory only and gives it to the installed `enroll` on
+standard input. On Linux without root it fetches the script of the same release
+into a private temporary directory, runs it once through `sudo` and removes it.
+
+To manufacture or update the device without enrolling, pipe the script without
+arguments.
+
+```sh
+curl -fsSL https://github.com/amnezia-gpt/agent-firmware/releases/latest/download/agent-firmware-install.sh | sh
+```
+
+Repeating the installation command on a working device updates the firmware and
+ends with `already_enrolled` and exit status 1. The device keeps working and the
+code is not used.
+
+To check the installer before running it, save it from the exact versioned
+asset URL under `releases/download/` and compare its digest. The saved script
+takes the code on standard input.
 
 ```sh
 curl -fsSLo agent-firmware-install.sh '<versioned installer URL>' &&
 echo '<SHA-256>  agent-firmware-install.sh' | sha256sum -c - &&
 printf '%s' '<one-time code>' |
   sh agent-firmware-install.sh --issuer 'https://auth.example' --enrollment-code-stdin
-```
-
-To manufacture or update the device without enrolling, run the verified
-bootstrap without arguments.
-
-```sh
-sh agent-firmware-install.sh
 ```
 
 If Linux returns `root_required` in a non-interactive session, run the command
@@ -155,8 +174,8 @@ agent-firmware status
 agent-firmware update
 ```
 
-Use `env AGENT_FIRMWARE_NO_MODIFY_PATH=1 sh agent-firmware-install.sh` to install
-without shell setup. The preference carries over to updates. If the shell
+Put `AGENT_FIRMWARE_NO_MODIFY_PATH=1` before `sh` in the installation command to
+install without shell setup. The preference carries over to updates. If the shell
 cannot find the short command, use the Application Support path directly.
 
 ```sh
@@ -245,17 +264,17 @@ removes the firmware's command link and makes its PATH setup inactive.
 Add `--delete-data` to erase firmware volumes of every domain on the host. A
 subsequent install creates a new IDevID. Both removal commands report domain
 deregistration separately from local completion. Repeat an interrupted command
-with the same flags. If the installed binary is gone, resume with the verified
-`sh agent-firmware-install.sh --decommission --confirm` command and the original
+with the same flags. If the installed binary is gone, resume by piping the
+installation script to `sh -s -- --decommission --confirm` with the original
 data deletion flag. Unclassified firmware volumes also stay by default.
 
 If installation reports `legacy_state_layout` or `retained_firmware_volumes`,
-the following commands erase the firmware and its local data on this host.
-This cannot be undone. Download the script first if it is missing:
+the following command erases the firmware and its local data on this host.
+This cannot be undone.
 
 ```sh
-curl -fsSLo agent-firmware-install.sh https://github.com/amnezia-gpt/agent-firmware/releases/latest/download/agent-firmware-install.sh
-sh agent-firmware-install.sh --decommission --confirm --delete-data
+curl -fsSL https://github.com/amnezia-gpt/agent-firmware/releases/latest/download/agent-firmware-install.sh |
+  sh -s -- --decommission --confirm --delete-data
 ```
 
 Then run your original installation command again, unchanged. Cleanup of an

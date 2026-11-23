@@ -210,7 +210,7 @@ flow. If it expires, repeat only enrollment (stage 3) with a new code.
 6. Every stage can be repeated; a failed stage does not destroy the result of
    the stages before it.
 7. An enrollment code is used once and is consumed only by stage 3 or 3a. A delivery
-   tool may carry it to that stage without reading or keeping it. Stage 1 does not
+   tool may carry it to that stage without storing or printing it. Stage 1 does not
    consume it: a failed manufacture leaves the code unspent.
 8. An update preserves identity and user data. It refuses a release that drops,
    renames or reclasses held user data. Workloads own the data format and must

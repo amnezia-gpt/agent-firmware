@@ -120,6 +120,18 @@ secret=enrc_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopq
 begin_trial() { : > "$fx/calls"; : > "$fx/environments"; rm -f "$fx/enrolled-input"; }
 run() { begin_trial; set +e; sh "$@" > "$fx/stdout" 2> "$fx/stderr" < /dev/null; code=$?; set -e; }
 run_piped() { value=$1; shift; begin_trial; set +e; printf '%s' "$value" | sh "$@" > "$fx/stdout" 2> "$fx/stderr"; code=$?; set -e; }
+# The code in the environment, the script as a file.
+run_env() { value=$1; shift; begin_trial; set +e; AGENT_FIRMWARE_ENROLLMENT_CODE=$value sh "$@" > "$fx/stdout" 2> "$fx/stderr" < /dev/null; code=$?; set -e; }
+# The script on standard input, as "curl ... | sh -s -- <arguments>". An empty first argument leaves the variable unset.
+run_stream() {
+ value=$1; shift; begin_trial; set +e
+ if [ -n "$value" ]; then AGENT_FIRMWARE_ENROLLMENT_CODE=$value sh -s -- "$@" < "$fx/bootstrap.sh" > "$fx/stdout" 2> "$fx/stderr"
+ else sh -s -- "$@" < "$fx/bootstrap.sh" > "$fx/stdout" 2> "$fx/stderr"; fi
+ code=$?; set -e
+}
+no_variable() { ! grep -q AGENT_FIRMWARE_ENROLLMENT_CODE "$fx/environments" || { echo 'the code variable reached a child' >&2; exit 1; }; }
+no_self_fetch() { ! grep -q 'agent-firmware-install\.sh' "$fx/calls" || { echo 'the script was fetched again' >&2; exit 1; }; }
+no_private_copy() { [ -z "$(find /tmp -maxdepth 1 -name 'agent-firmware-bootstrap.*')" ] || { echo 'private copy left behind' >&2; exit 1; }; }
 # Progress lines may precede it, but an error is exactly one JSON line and the last one.
 expect_error() { [ "$code" = 1 ] && [ "$(tail -n 1 "$fx/stderr")" = "{\"error_code\":\"$1\"}" ] && [ "$(grep -c error_code "$fx/stderr")" = 1 ] || { echo "expected $1, got $code: $(cat "$fx/stderr")" >&2; exit 1; }; }
 no_changes() { ! grep -Eq '^(apt-get|curl|firmware|installed|systemctl enable)' "$fx/calls" || { echo "unexpected side effect: $(cat "$fx/calls")" >&2; exit 1; }; }
@@ -162,6 +174,18 @@ run "$fx/bootstrap.sh" --enrollment-code-file "$fx/calls"; expect_error invalid_
 run "$fx/bootstrap.sh" --decommission; expect_error invalid_usage; no_changes
 run "$fx/bootstrap.sh" --decommission --confirm --issuer https://auth.example.test --enrollment-code-stdin; expect_error invalid_usage; no_changes
 grep -qx 'agent-firmware-install: run with --help for usage' "$fx/stderr"
+# The code variable belongs to "--issuer <url>" alone and must not be empty.
+run_env "$secret" "$fx/bootstrap.sh"; expect_error invalid_usage; no_changes; no_secret
+run_env "$secret" "$fx/bootstrap.sh" --issuer https://auth.example.test --enrollment-code-stdin; expect_error invalid_usage; no_changes; no_secret
+run_env "$secret" "$fx/bootstrap.sh" --decommission --confirm; expect_error invalid_usage; no_changes; no_secret
+run_env "$secret" "$fx/bootstrap.sh" --issuer ''; expect_error invalid_usage; no_changes; no_secret
+begin_trial; set +e; AGENT_FIRMWARE_ENROLLMENT_CODE= sh "$fx/bootstrap.sh" --issuer https://auth.example.test > "$fx/stdout" 2> "$fx/stderr" < /dev/null; code=$?; set -e
+expect_error invalid_usage; no_changes
+run_stream "$secret"; expect_error invalid_usage; no_changes; no_secret
+run_stream '' --issuer https://auth.example.test; expect_error invalid_usage; no_changes
+# Help ignores the variable and does not show it.
+run_env "$secret" "$fx/bootstrap.sh" --help; [ "$code" = 0 ] && cmp -s "$fx/help" "$fx/stdout"; no_secret
+grep -F 'AGENT_FIRMWARE_ENROLLMENT_CODE=<code> sh -s -- --issuer <url>' "$fx/help" >/dev/null
 
 # Unsupported system refuses before any change.
 printf 'ID=debian\nVERSION_ID="12"\n' > /etc/os-release
@@ -257,6 +281,25 @@ grep -F 'The device is enrolled and working. The code was not used.' "$fx/stderr
 [ ! -s "$fx/stdout" ]
 rm "$fx/enroll-fails"
 
+# Root Linux, the script on standard input: the code comes from the environment
+# and reaches only the standard input of the installed enrollment command.
+run_stream "$secret" --issuer https://auth.example.test
+installed; enrolled /usr/local/bin/agent-firmware; no_variable; no_self_fetch
+! grep -q '^sudo ' "$fx/calls"
+run_env "$secret" "$fx/bootstrap.sh" --issuer https://auth.example.test
+installed; enrolled /usr/local/bin/agent-firmware; no_variable; no_self_fetch
+touch "$fx/install-fails"
+run_stream "$secret" --issuer https://auth.example.test; expect_error configuration_rejected; not_enrolled; no_secret; no_variable
+rm "$fx/install-fails"
+printf 'already_enrolled\n' > "$fx/enroll-fails"
+run_stream "$secret" --issuer https://auth.example.test; expect_error already_enrolled; installed; no_secret; no_variable
+[ ! -s "$fx/stdout" ]
+rm "$fx/enroll-fails"
+run_stream ''; [ "$code" = 0 ] && installed && [ "$(cat "$fx/stdout")" = '{"installed":true}' ]; not_enrolled; no_self_fetch
+run_stream '' --decommission --confirm --delete-data
+[ "$code" = 0 ] && grep -qx 'firmware decommission --confirm --delete-data' "$fx/calls"; not_installed; no_self_fetch
+[ -z "$(find /usr/local/lib -maxdepth 1 -name 'agent-firmware-bootstrap.*')" ] || { echo 'work directory left behind' >&2; exit 1; }
+
 # Emulate Linux ID changes and the sudo command without granting privileges.
 stub id <<'SH'
 #!/bin/sh
@@ -301,6 +344,41 @@ for mode in noop deny; do
  enrollment_trial; one_sudo; expect_error root_required; no_changes; not_enrolled; no_secret
  grep -F 'Run from a terminal where sudo can prompt, or run the same command as root.' "$fx/stderr" >/dev/null
 done
+
+# Not root, the script on standard input: one copy of the same release is
+# fetched into a private directory, run once through sudo and removed.
+printf 'grant\n' > "$fx/sudo-mode"
+self_fetched() { [ "$(grep -Ec '^curl .*download/v0\.1\.0/agent-firmware-install\.sh$' "$fx/calls")" = 1 ]; }
+run_stream "$secret" --issuer https://auth.example.test; expect_error download_failed
+! grep -Eq '^(sudo|firmware|installed)' "$fx/calls"; no_secret; no_private_copy
+cp "$fx/bootstrap.sh" "$fx/assets/agent-firmware-install.sh"
+run_stream "$secret" --issuer https://auth.example.test
+one_sudo; self_fetched; installed; enrolled /usr/local/bin/agent-firmware; no_variable; no_private_copy
+grep -Eq 'agent-firmware-sudo /tmp/agent-firmware-bootstrap\.[A-Za-z0-9]+/agent-firmware-install\.sh --issuer https://auth\.example\.test --enrollment-code-stdin$' "$fx/calls"
+run_stream ''; one_sudo; self_fetched; [ "$code" = 0 ] && installed; not_enrolled; no_private_copy
+run_stream '' --decommission --confirm; one_sudo; self_fetched; [ "$code" = 0 ]; not_installed; not_enrolled; no_private_copy
+touch "$fx/install-fails"
+run_stream "$secret" --issuer https://auth.example.test
+one_sudo; expect_error configuration_rejected; not_enrolled; no_secret; no_variable; no_private_copy
+rm "$fx/install-fails"
+# The file form with the variable needs no second download.
+run_env "$secret" "$fx/bootstrap.sh" --issuer https://auth.example.test
+one_sudo; no_self_fetch; installed; enrolled /usr/local/bin/agent-firmware; no_variable
+# A copy of another release, or something that is not the script, is refused before sudo.
+sed "s/^release_tag=.*/release_tag='v9.9.9'/" "$fx/bootstrap.sh" > "$fx/assets/agent-firmware-install.sh"
+run_stream "$secret" --issuer https://auth.example.test; expect_error download_failed
+! grep -Eq '^(sudo|firmware|installed)' "$fx/calls"; no_secret; no_private_copy
+sed '1d' "$fx/bootstrap.sh" > "$fx/assets/agent-firmware-install.sh"
+run_stream ''; expect_error download_failed; ! grep -q '^sudo ' "$fx/calls"; no_private_copy
+cp "$fx/bootstrap.sh" "$fx/assets/agent-firmware-install.sh"
+# An interrupt while sudo runs still removes the private copy.
+stub sudo <<'SH'
+#!/bin/sh
+printf 'sudo %s\n' "$*" >> /run/af-bootstrap/calls
+kill -TERM "$PPID"
+exit 1
+SH
+run_stream ''; expect_error bootstrap_interrupted; not_installed; no_private_copy
 
 # Simulate the Darwin shell tools inside this disposable Linux container.
 stub uname <<'SH'
@@ -347,6 +425,10 @@ mac_wrapper="$HOME/Library/Application Support/agent-firmware/agent-firmware"
 mkdir -p "$(dirname "$mac_wrapper")"
 cp -p /usr/local/bin/agent-firmware "$mac_wrapper"
 enrollment_trial; enrolled "$mac_wrapper"
+# The script on standard input on macOS: the code from the environment, no sudo, no second download.
+run_stream "$secret" --issuer https://auth.example.test
+enrolled "$mac_wrapper"; no_variable; no_self_fetch
+! grep -q '^sudo ' "$fx/calls"
 ! grep -Eq '^(sudo|apt-get|systemctl|firmware validate-release)' "$fx/calls"
 printf '# changed\n' >> "$fx/assets/agent-firmware-darwin-arm64"
 run "$fx/bootstrap.sh"; expect_error artifact_digest_mismatch; not_installed

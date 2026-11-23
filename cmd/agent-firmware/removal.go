@@ -31,7 +31,7 @@ func removalResponse(state, deregistration string, kept []dockerengine.VolumeInf
 	if len(kept) > 0 {
 		result.DeleteDataCommand = "sudo agent-firmware decommission --confirm --delete-data"
 		if bootstrap {
-			result.DeleteDataCommand = "sudo sh agent-firmware-install.sh --decommission --confirm --delete-data"
+			result.DeleteDataCommand = pipedDecommission + " --delete-data"
 		}
 		result.DeleteDataCommand = operatorText(result.DeleteDataCommand)
 	}

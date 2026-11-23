@@ -190,10 +190,14 @@ func respond(stdout, stderr io.Writer, value any) int {
 	return 0
 }
 
-const reinstallInstructions = `agent-firmware:   sudo sh agent-firmware-install.sh --decommission --confirm --delete-data
+// pipedDecommission removes the device without a local copy of the
+// installation script and without an installed binary. The script asks sudo
+// itself on Linux and refuses root on macOS, so the line is the same everywhere.
+const pipedDecommission = "curl -fsSL " + updateScriptURL + " | sh -s -- --decommission --confirm"
+
+const reinstallInstructions = "agent-firmware:   " + pipedDecommission + ` --delete-data
 agent-firmware: Then run your original installation command again, unchanged.
-agent-firmware: If agent-firmware-install.sh is not in this directory, download it first:
-agent-firmware:   curl -fsSLo agent-firmware-install.sh ` + updateScriptURL + "\n"
+`
 
 func report(stderr io.Writer, code string, exit int) int {
 	if writer, ok := stderr.(commandDiagnostics); ok && exit == 2 {
