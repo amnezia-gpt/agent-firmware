@@ -49,10 +49,14 @@ workload convergence.
   v4 pin for Linux amd64 and arm64. With fixture profiles, it accepted the
   optional resource present or absent and rejected the missing required scope.
 
+- The published workloads v0.11.0 manifest pins schema 5 and both Linux
+  image platforms. The firmware v0.10.1 release candidate copies that asset
+  verbatim into `release/workload-release.json`. Its SHA-256 is
+  `6b6911a5144e9297d327449ed4143335fae145ee650b77782ad6160b7e285499`.
+
 ## Remaining acceptance
 
 Run enrollment, update, restart, and rollback on a selected disposable host
 with actual workload images. Check that the optional key is absent from the
 running process environment when the resource is absent, including a trial
-with an image default. Coordinate adoption of the shared v5 vectors and pin
-the published v5 manifest after the firmware supports it. See [PLAN.md](PLAN.md).
+with an image default. Coordinate adoption of the shared v5 vectors. See [PLAN.md](PLAN.md).

@@ -21,8 +21,9 @@
    Test enrollment input, update, and ordinary restart.
 4. [x] Run firmware tests, vet, and release build checks. Verify the workloads
    schema and generator on their local #76 branch.
-5. [ ] Coordinate reuse of the v5 vectors and run live acceptance on a selected
-   disposable host with actual workload images before pinning the v5 asset.
+5. [x] Pin the published workloads v0.11.0 manifest in firmware v0.10.1.
+6. [ ] Coordinate reuse of the v5 vectors and run live acceptance on a selected
+   disposable host with the pinned workload images.
 
 ## Design Choices
 
@@ -53,6 +54,12 @@
   and `node --test scripts/publication.test.mjs scripts/release-promotion.test.mjs scripts/release-stack.test.mjs`.
   The firmware v5 vector set also passed in a temporary copy of the schema
   check. No changes to the adjacent checkout were needed for verification.
+- Satisfied locally: `WORKLOAD_PUBLISHED_MANIFEST=manifest.json sh scripts/build-release.sh v0.10.1 /tmp/agent-firmware-pin-check`
+  with the downloaded workloads v0.11.0 asset and a temporary output directory
+  verified both workload platforms and packaged the published manifest verbatim.
+  Registry inspection resolved both pinned digests for Linux amd64 and arm64.
+  The built firmware accepted fixture profiles with and without the optional
+  scope and returned the expected error for missing required scopes.
 - Pending: on a selected disposable host, enroll against both metadata
   variants, inspect the workload process environment, exercise v4-to-v5 update,
   rollback and restart, and record the exact published workload release used.
