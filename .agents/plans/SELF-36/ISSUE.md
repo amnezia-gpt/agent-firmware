@@ -3,7 +3,7 @@
 ## Metadata
 
 - Type: Feature / installer
-- Status: Validating (implemented on `codex/self-36-piped-bootstrap`, not committed; host runs and release pending)
+- Status: Validating (released in v0.9.0; installation and enrollment on real hosts pending)
 - Size / risk: Small / medium (the bootstrap gains a second way to receive the code and to elevate)
 - Parent: [SELF-14](../SELF-14/ISSUE.md)
 - Builds on: [SELF-34](../SELF-34/ISSUE.md). Its forms stay supported and unchanged.
@@ -160,7 +160,7 @@ curl -fsSL <update script address> | sh -s -- --decommission --confirm --delete-
   pipeline was checked in fish 4.8.1 on 2026-11-23; fish older than 3.1 does not support it and README says so).
 - [ ] On Ubuntu 24.04 (amd64 or arm64) as a user with `sudo`, and on an Apple Silicon Mac, the piped line
   installs and enrolls a device.
-- [ ] A release publishes the bootstrap with this form.
+- [x] A release publishes the bootstrap with this form.
 
 ## Compatibility
 
@@ -169,7 +169,7 @@ after a release with this form is the latest one.
 
 ## Evidence
 
-Implemented on 2026-11-23, uncommitted.
+Implemented on 2026-11-23, commit `0565ab2`, released as v0.9.0.
 
 - `tests/agent-firmware-install.sh` passes in disposable Ubuntu 24.04 containers, native arm64 and emulated
   amd64, without network. It covers the arguments table, the code reaching only the standard input of `enroll`,
@@ -183,9 +183,11 @@ Implemented on 2026-11-23, uncommitted.
 - "No new file in the current directory" is shown only indirectly: the tests run with the source tree mounted
   read-only as the current directory.
 
-Not done: a real installation and enrollment on Ubuntu and on a Mac; an interrupt from a real terminal; a
-release.
+- Release CI for v0.9.0 passed on Ubuntu amd64, Ubuntu arm64 and macOS 15, and published the assets. The
+  published script, piped from the `releases/latest` address to `sh -s -- --help`, prints the new usage.
+
+Not done: a real installation and enrollment on Ubuntu and on a Mac; an interrupt from a real terminal.
 
 ## Next Action
 
-Commit and release on the owner's word; run the piped line on Ubuntu and on a Mac; then the control-plane page.
+Run the piped line on Ubuntu and on a Mac; then the control-plane page.
